@@ -79,6 +79,9 @@ build/
 sdkconfig
 sdkconfig.old
 
+# AI assistant rules
+.clinerules
+
 # Windows specific
 Thumbs.db
 ehthumbs.db

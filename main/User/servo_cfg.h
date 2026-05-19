@@ -45,28 +45,46 @@ typedef enum
 #define SERVO_PWM_FREQ 50                    /* Hz, 舵机标准周期 */
 #define SERVO_PWM_BITS 12                    /* 0~4095 占空比精度 */
 
-/*------ 脉宽范围 (微秒) ------
- *
- * TBS2701 ×5: 典型 500~2500μs
- * ZP15S 夹爪: 数据手册标称 500~2500μs，
- *             但实际行程短，建议上电后实测：
- *             全开→记录 pulse_open, 全闭→记录 pulse_close，
- *             用 (pulse_open, pulse_close) 替换 (MIN, MAX) 可避免堵转烧毁。
- *
- * 以下为初始化默认值，运行时必须可覆盖。
- *----------------------------------------------*/
-#define SERVO_PULSE_MIN_US 500                       /* 对应 0°基准 */
-#define SERVO_PULSE_MAX_US 2500                      /* 对应 180°基准 */
+/*------ Period ------*/
 #define SERVO_PERIOD_US (1000000UL / SERVO_PWM_FREQ) /* 20000μs */
 
-/*------ 占空比边界 (编译期预计算) ------
- *  duty = pulse_us / period_us × (2^bits)
- *  MIN  = 500/20000 × 4096 = 102
- *  MAX  = 2500/20000 × 4096 = 512
+/*------ 单舵机独立脉宽范围 (微秒) ------*
+ *
+ * TBS2701 ×5: 典型标称 500~2500μs，上电实测后修正
+ * ZP15S 夹爪: 标称 500~2500μs，行程短，上电实测后修正
+ *
+ * 未校准时先用默认值，校准后只改这一段。
  *----------------------------------------------*/
-#define SERVO_DUTY_MIN ((uint32_t)((uint64_t)SERVO_PULSE_MIN_US * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+/* TBS2701 × 5 */
+#define SERVO_PULSE_MIN_BASE 500
+#define SERVO_PULSE_MAX_BASE 2500
+#define SERVO_PULSE_MIN_JOINT1 500
+#define SERVO_PULSE_MAX_JOINT1 2500
+#define SERVO_PULSE_MIN_JOINT2 500
+#define SERVO_PULSE_MAX_JOINT2 2500
+#define SERVO_PULSE_MIN_JOINT3 500
+#define SERVO_PULSE_MAX_JOINT3 2500
+#define SERVO_PULSE_MIN_ROTATE 500
+#define SERVO_PULSE_MAX_ROTATE 2500
+/* ZP15S 夹爪 */
+#define SERVO_PULSE_MIN_GRIPPER 500
+#define SERVO_PULSE_MAX_GRIPPER 2500
 
-#define SERVO_DUTY_MAX ((uint32_t)((uint64_t)SERVO_PULSE_MAX_US * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+/*------ 占空比边界 (编译期预计算，每舵机独立) ------*
+ *  duty = pulse_us / period_us × (2^bits)
+ *----------------------------------------------*/
+#define SERVO_DUTY_MIN_BASE ((uint32_t)((uint64_t)SERVO_PULSE_MIN_BASE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_BASE ((uint32_t)((uint64_t)SERVO_PULSE_MAX_BASE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_JOINT1 ((uint32_t)((uint64_t)SERVO_PULSE_MIN_JOINT1 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_JOINT1 ((uint32_t)((uint64_t)SERVO_PULSE_MAX_JOINT1 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_JOINT2 ((uint32_t)((uint64_t)SERVO_PULSE_MIN_JOINT2 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_JOINT2 ((uint32_t)((uint64_t)SERVO_PULSE_MAX_JOINT2 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_JOINT3 ((uint32_t)((uint64_t)SERVO_PULSE_MIN_JOINT3 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_JOINT3 ((uint32_t)((uint64_t)SERVO_PULSE_MAX_JOINT3 * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_ROTATE ((uint32_t)((uint64_t)SERVO_PULSE_MIN_ROTATE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_ROTATE ((uint32_t)((uint64_t)SERVO_PULSE_MAX_ROTATE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_GRIPPER ((uint32_t)((uint64_t)SERVO_PULSE_MIN_GRIPPER * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_GRIPPER ((uint32_t)((uint64_t)SERVO_PULSE_MAX_GRIPPER * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
 
 /*------ 安全限位 (度) ------
  *  每个关节物理行程不同，上电后必须实测修正。
@@ -97,6 +115,7 @@ typedef enum
  *  更新机制: esp_timer 周期回调，每 EASING_TICK_MS 毫秒
  *           计算一次目标占空比并写入 LEDC。
  *=======================================================*/
+
 /*------ 更新周期 (毫秒) ------
  *
  *  20ms = 50Hz，对舵机信号响应足够，CPU 占用极低。
@@ -104,26 +123,61 @@ typedef enum
  *  不建议改。
  *----------------------------------------------*/
 #define SERVO_EASING_TICK_MS 20
-/*------ 默认缓动时长 (毫秒) ------
+
+/*------ 默认缓动时长 (毫秒) [备用，向后兼容] ------
  *
- *  舵机从 0° 到 180° 的完整过渡时间。
- *  实际时长会按角度差等比缩放。
- *  800~1200ms 是机械臂常用范围：
- *    太短 → 惯性冲击，小车会晃
- *    太慢 → 响应迟钝，自动抓取节奏拖沓
+ *  已被下方 SERVO_EASING_xxx_MS 各舵机独立配置取代。
+ *  保留用于未指定独立时长时的兜底值。
  *----------------------------------------------*/
 #define SERVO_EASING_DURATION_MS 1000
-/*------ 各舵机独立缓动时长 (可选覆盖) ------
+
+/*------ 各舵机独立缓动时长 (毫秒) ------
  *
- *  若需要某轴单独更慢/更快，在此定义。
- *  只有定义了才生效，否则用上面的默认值。
- *  建议: 夹爪(ZP15S)给 600ms，大关节给 1000~1200ms。
+ *  建议范围:
+ *    大负载关节(BASE/JOINT1): 1000~1200ms
+ *    小负载关节(JOINT2/JOINT3): 800~1000ms
+ *    ZP15S 夹爪: 500~700ms
  *----------------------------------------------*/
-#define SERVO_EASING_BASE_MS 1200 /* 基座旋转，负载较大，慢一点 */
+#define SERVO_EASING_BASE_MS 1200
 #define SERVO_EASING_JOINT1_MS 1000
 #define SERVO_EASING_JOINT2_MS 1000
-#define SERVO_EASING_JOINT3_MS 800  /* 末端关节，载荷小，快一点 */
-#define SERVO_EASING_ROTATE_MS 600  /* 夹爪旋转 */
-#define SERVO_EASING_GRIPPER_MS 600 /* 夹爪开合，ZP15S 行程短 */
+#define SERVO_EASING_JOINT3_MS 800
+#define SERVO_EASING_ROTATE_MS 600
+#define SERVO_EASING_GRIPPER_MS 600
+
+/*=======================================================
+ *  查表辅助宏
+ *
+ *  用法 (在 .c 文件中):
+ *    static const uint32_t s_duty_min[SERVO_COUNT] = SERVO_DUTY_MIN_TBL;
+ *    uint32_t val = s_duty_min[SERVO_ID_JOINT2];
+ *
+ *  维护规则: 元素顺序必须严格对应 ServoID_t 枚举顺序。
+ *=======================================================*/
+
+#define SERVO_DUTY_MIN_TBL                         \
+    {SERVO_DUTY_MIN_BASE, SERVO_DUTY_MIN_JOINT1,   \
+     SERVO_DUTY_MIN_JOINT2, SERVO_DUTY_MIN_JOINT3, \
+     SERVO_DUTY_MIN_ROTATE, SERVO_DUTY_MIN_GRIPPER}
+
+#define SERVO_DUTY_MAX_TBL                         \
+    {SERVO_DUTY_MAX_BASE, SERVO_DUTY_MAX_JOINT1,   \
+     SERVO_DUTY_MAX_JOINT2, SERVO_DUTY_MAX_JOINT3, \
+     SERVO_DUTY_MAX_ROTATE, SERVO_DUTY_MAX_GRIPPER}
+
+#define SERVO_PULSE_MIN_TBL                          \
+    {SERVO_PULSE_MIN_BASE, SERVO_PULSE_MIN_JOINT1,   \
+     SERVO_PULSE_MIN_JOINT2, SERVO_PULSE_MIN_JOINT3, \
+     SERVO_PULSE_MIN_ROTATE, SERVO_PULSE_MIN_GRIPPER}
+
+#define SERVO_PULSE_MAX_TBL                          \
+    {SERVO_PULSE_MAX_BASE, SERVO_PULSE_MAX_JOINT1,   \
+     SERVO_PULSE_MAX_JOINT2, SERVO_PULSE_MAX_JOINT3, \
+     SERVO_PULSE_MAX_ROTATE, SERVO_PULSE_MAX_GRIPPER}
+
+#define SERVO_EASING_MS_TBL                          \
+    {SERVO_EASING_BASE_MS, SERVO_EASING_JOINT1_MS,   \
+     SERVO_EASING_JOINT2_MS, SERVO_EASING_JOINT3_MS, \
+     SERVO_EASING_ROTATE_MS, SERVO_EASING_GRIPPER_MS}
 
 #endif /* SERVO_CFG_H */

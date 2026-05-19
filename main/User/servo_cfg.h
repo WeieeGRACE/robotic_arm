@@ -48,7 +48,7 @@ typedef enum
 /*------ Period ------*/
 #define SERVO_PERIOD_US (1000000UL / SERVO_PWM_FREQ) /* 20000μs */
 
-/*------ 单舵机独立脉宽范围 (微秒) ------*
+/*------ 单舵机独立脉宽范围 (微秒) ------
  *
  * TBS2701 ×5: 典型标称 500~2500μs，上电实测后修正
  * ZP15S 夹爪: 标称 500~2500μs，行程短，上电实测后修正
@@ -70,7 +70,7 @@ typedef enum
 #define SERVO_PULSE_MIN_GRIPPER 500
 #define SERVO_PULSE_MAX_GRIPPER 2500
 
-/*------ 占空比边界 (编译期预计算，每舵机独立) ------*
+/*------ 占空比边界 (编译期预计算，每舵机独立) ------
  *  duty = pulse_us / period_us × (2^bits)
  *----------------------------------------------*/
 #define SERVO_DUTY_MIN_BASE ((uint32_t)((uint64_t)SERVO_PULSE_MIN_BASE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))

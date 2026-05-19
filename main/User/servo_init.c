@@ -4,40 +4,16 @@
  *  职责: LEDC 硬件初始化 + 上电安全姿态写入
  *  不涉及: 缓动 / esp_timer / 运行时更新
  *
- *  依赖: servo_cfg.h (配置宏)
- *
- *  angle_to_duty() 目前为 static 临时版本，
- *  等 servo_util.c 写好后统一挪走。
+ *  依赖: servo_cfg.h  (配置宏)
+ *        servo_util.h (角度→占空比转换)
  *=====================================================*/
 
 #include "servo_cfg.h"
+#include "servo_util.h" /* ← 新增: 用外部 servo_angle_to_duty() */
 #include "driver/ledc.h"
 #include "esp_log.h"
 
 static const char *TAG = "servo_init";
-
-/*------ static 临时: 角度 → 占空比 ------
- *
- * servo_util.c 写好后删除此处，改为 extern 调用。
- * 整数四舍五入，无浮点开销。
- *
- * 计算:
- *   duty = DUTY_MIN + angle/180 * (DUTY_MAX - DUTY_MIN)
- *        = 102 + angle * 410 / 180
- *
- * 输入钳位防止越界。
- *----------------------------------------------*/
-static uint32_t angle_to_duty(float deg)
-{
-    if (deg < SERVO_ANGLE_MIN_DEG)
-        deg = SERVO_ANGLE_MIN_DEG;
-    if (deg > SERVO_ANGLE_MAX_DEG)
-        deg = SERVO_ANGLE_MAX_DEG;
-
-    uint32_t span = SERVO_DUTY_MAX - SERVO_DUTY_MIN; /* 410 */
-    uint32_t duty = SERVO_DUTY_MIN + (uint32_t)(deg * (float)span / SERVO_ANGLE_MAX_DEG + 0.5f);
-    return duty;
-}
 
 /*------ 上电 HOME 角度数组 (与 ServoID_t 顺序对应) ------*/
 static const float s_home_angles[SERVO_COUNT] = {
@@ -49,17 +25,7 @@ static const float s_home_angles[SERVO_COUNT] = {
     SERVO_HOME_GRIPPER,
 };
 
-/*------ GPIO 映射表 (与 ServoID_t 顺序对应) ------*/
-static const gpio_num_t s_servo_gpios[SERVO_COUNT] = {
-    SERVO_GPIO_BASE,
-    SERVO_GPIO_JOINT1,
-    SERVO_GPIO_JOINT2,
-    SERVO_GPIO_JOINT3,
-    SERVO_GPIO_ROTATE,
-    SERVO_GPIO_GRIPPER,
-};
-
-/*------ LEDC Channel 映射表 (与 ServoID_t 顺序对应) ------*/
+/*------ 舵机 LEDC 通道查表 (仅本文件使用) ------*/
 static const ledc_channel_t s_servo_chs[SERVO_COUNT] = {
     SERVO_CH_BASE,
     SERVO_CH_JOINT1,
@@ -67,6 +33,16 @@ static const ledc_channel_t s_servo_chs[SERVO_COUNT] = {
     SERVO_CH_JOINT3,
     SERVO_CH_ROTATE,
     SERVO_CH_GRIPPER,
+};
+
+/*------ 舵机 GPIO 查表 (仅本文件使用) ------*/
+static const int s_servo_gpios[SERVO_COUNT] = {
+    SERVO_GPIO_BASE,
+    SERVO_GPIO_JOINT1,
+    SERVO_GPIO_JOINT2,
+    SERVO_GPIO_JOINT3,
+    SERVO_GPIO_ROTATE,
+    SERVO_GPIO_GRIPPER,
 };
 
 /*=====================================================
@@ -84,10 +60,10 @@ esp_err_t servo_init(void)
 
     /*--- Step 1: LEDC Timer ---*/
     const ledc_timer_config_t timer_cfg = {
-        .speed_mode = SERVO_LEDC_SPEED,    /* LOW_SPEED_MODE */
-        .timer_num = SERVO_LEDC_TIMER,     /* TIMER_0 */
-        .duty_resolution = SERVO_PWM_BITS, /* 12-bit */
-        .freq_hz = SERVO_PWM_FREQ,         /* 50Hz */
+        .speed_mode = SERVO_LEDC_SPEED,
+        .timer_num = SERVO_LEDC_TIMER,
+        .duty_resolution = SERVO_PWM_BITS,
+        .freq_hz = SERVO_PWM_FREQ,
         .clk_cfg = LEDC_AUTO_CLK,
     };
 
@@ -101,7 +77,8 @@ esp_err_t servo_init(void)
     /*--- Step 2: 6 路 Channel ---*/
     for (int i = 0; i < SERVO_COUNT; i++)
     {
-        uint32_t duty = angle_to_duty(s_home_angles[i]);
+        /* 调用 servo_util 的函数，删除了本文件内部的 static angle_to_duty */
+        uint32_t duty = servo_angle_to_duty((ServoID_t)i, s_home_angles[i]);
 
         const ledc_channel_config_t ch_cfg = {
             .speed_mode = SERVO_LEDC_SPEED,

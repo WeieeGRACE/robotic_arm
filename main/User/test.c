@@ -20,7 +20,7 @@
 
 static const char *TAG = "test_calibrate";
 
-/*------ LEDC 通道查表 (与 servo_set.c 相同) ------*/
+/*------ LEDC 通道查表 (6 个舵机) ------*/
 static const ledc_channel_t s_channel_tbl[SERVO_COUNT] = {
     SERVO_CH_BASE,
     SERVO_CH_JOINT1,
@@ -28,10 +28,9 @@ static const ledc_channel_t s_channel_tbl[SERVO_COUNT] = {
     SERVO_CH_JOINT3,
     SERVO_CH_ROTATE,
     SERVO_CH_GRIPPER,
-    SERVO_CH_EXTRA,
 };
 
-/*------ 舵机名称查表 (用于打印) ------*/
+/*------ 舵机名称查表 (6 个) ------*/
 static const char *s_servo_names[SERVO_COUNT] = {
     "IO15 基座旋转",
     "IO14 肩关节",
@@ -39,7 +38,6 @@ static const char *s_servo_names[SERVO_COUNT] = {
     "IO12 腕关节",
     "IO11 夹子旋转",
     "IO10 夹子开合 (ZP15S)",
-    "IO9  扩展舵机",
 };
 
 /*------ 内部工具: 写占空比 ------*/
@@ -291,16 +289,16 @@ void move_multi_to(const ServoID_t ids[], const uint32_t targets[],
 }
 
 /*-----------------------------------------------------
- *  action_sequence() — 预定义动作序列
+ *  action_sequence() — 预定义动作序列（适配 6 个舵机）
  *
  *  步进值 10μs，间隔 30ms。
  *
  *  阶段:
- *    Phase1: 舵机1→1400, 2→1850, 3→1150, 4→2150, 5→900, 6→1150 (并行)
- *    Phase2: 舵机0 1500→2300 (单舵)
- *    Phase3: 舵机3→1450, 4→1200, 5→1500 (并行)
- *    Phase4: 舵机6 1150→2250 (单舵)
- *    Phase5: 舵机2→1850, 3→1150, 4→2150 (并行)
+ *    Phase1: 全部 6 个舵机并行移动到合理测试位置
+ *    Phase2: 基座单独旋转 (0° → 180°)
+ *    Phase3: 肘、腕、夹爪旋转并行移动
+ *    Phase4: 夹爪开合 (打开 → 闭合)
+ *    Phase5: 肩、肘并行移动
  *-----------------------------------------------------*/
 void action_sequence(void)
 {
@@ -309,43 +307,57 @@ void action_sequence(void)
 
     ESP_LOGI(TAG, "\n===== 动作序列开始 =====");
 
-    /* Phase 1: 舵机1~6 并行 */
+    /* Phase 1: 全部 6 个舵机并行移动 (测试初始姿态) */
     {
         const ServoID_t ids[] = {
+            SERVO_ID_BASE,
             SERVO_ID_JOINT1,
             SERVO_ID_JOINT2,
             SERVO_ID_JOINT3,
             SERVO_ID_ROTATE,
             SERVO_ID_GRIPPER,
-            SERVO_ID_EXTRA,
         };
-        const uint32_t targets[] = {1400, 1850, 1150, 2150, 900, 1150};
-        ESP_LOGI(TAG, "\n--- Phase 1: 6舵并行 ---");
+        const uint32_t targets[] = {
+            1100, /* Base   1100μs → 约 170° (反向) 接近极限 */
+            1540, /* Joint1 1540μs → 约 90° */
+            800,  /* Joint2 800μs → 约 180° (反向) */
+            1080, /* Joint3 固定 1080μs */
+            1460, /* Rotate 固定 1460μs */
+            1440, /* Gripper 打开 */
+        };
+        ESP_LOGI(TAG, "\n--- Phase 1: 6 舵并行初始姿态 ---");
         move_multi_to(ids, targets, 6, STEP_US, WAIT_MS);
     }
 
-    /* Phase 2: 舵机0 单舵 */
-    ESP_LOGI(TAG, "\n--- Phase 2: 舵机0 1500 → 2300 ---");
+    /* Phase 2: 基座单独旋转 (从 1100 → 2300μs) */
+    ESP_LOGI(TAG, "\n--- Phase 2: 基座旋转 1100 → 2300μs ---");
     move_servo_to(SERVO_ID_BASE, 2300, STEP_US, WAIT_MS);
 
-    /* Phase 3: 舵机3,4,5 并行 */
+    /* Phase 3: 肘、腕、夹爪旋转并行移动 */
     {
-        const ServoID_t ids[] = {SERVO_ID_JOINT3, SERVO_ID_ROTATE, SERVO_ID_GRIPPER};
-        const uint32_t targets[] = {1450, 1200, 1500};
-        ESP_LOGI(TAG, "\n--- Phase 3: 3舵并行 ---");
+        const ServoID_t ids[] = {SERVO_ID_JOINT2, SERVO_ID_JOINT3, SERVO_ID_ROTATE};
+        const uint32_t targets[] = {
+            1900, /* Joint2 1900μs → 0° (反向) */
+            1080, /* Joint3 固定 */
+            1460, /* Rotate 固定 */
+        };
+        ESP_LOGI(TAG, "\n--- Phase 3: 3 舵并行 ---");
         move_multi_to(ids, targets, 3, STEP_US, WAIT_MS);
     }
 
-    /* Phase 4: 舵机6 单舵 */
-    ESP_LOGI(TAG, "\n--- Phase 4: 舵机6 1150 → 2250 ---");
-    move_servo_to(SERVO_ID_EXTRA, 2250, STEP_US, WAIT_MS);
+    /* Phase 4: 夹爪开合 (打开 → 闭合) */
+    ESP_LOGI(TAG, "\n--- Phase 4: 夹爪 1440 → 2110μs (闭合) ---");
+    move_servo_to(SERVO_ID_GRIPPER, 2110, STEP_US, WAIT_MS);
 
-    /* Phase 5: 舵机2,3,4 并行 */
+    /* Phase 5: 肩、肘并行移动 */
     {
-        const ServoID_t ids[] = {SERVO_ID_JOINT2, SERVO_ID_JOINT3, SERVO_ID_ROTATE};
-        const uint32_t targets[] = {1850, 1150, 2150};
-        ESP_LOGI(TAG, "\n--- Phase 5: 3舵并行 ---");
-        move_multi_to(ids, targets, 3, STEP_US, WAIT_MS);
+        const ServoID_t ids[] = {SERVO_ID_JOINT1, SERVO_ID_JOINT2};
+        const uint32_t targets[] = {
+            900, /* Joint1 900μs → 0° */
+            800, /* Joint2 800μs → 180° */
+        };
+        ESP_LOGI(TAG, "\n--- Phase 5: 肩肘并行 ---");
+        move_multi_to(ids, targets, 2, STEP_US, WAIT_MS);
     }
 
     ESP_LOGI(TAG, "\n===== 动作序列完成 =====\n");

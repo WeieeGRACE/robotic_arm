@@ -1,205 +1,171 @@
-/* Blink Example
+/**
+ * @file  main.c
+ * @brief 舵机方向符号验证程序
+ *
+ * 测试 SERVO_DIR_xxx 是否正确：
+ *   +1 → 角度↑ 脉宽↑
+ *   -1 → 角度↑ 脉宽↓
+ *
+ * 逐个舵机执行 0°→180°→HOME 序列，
+ * 串口打印期望表现，你观察实际运动判断方向。
+ */
 
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
-#include "led_strip.h"
-#include "sdkconfig.h"
-#include "test.h"
+
 #include "servo_cfg.h"
+#include "servo_init.h"
+#include "servo_util.h"
+#include "test.h"
 
-static const char *TAG = "example";
+static const char *TAG = "dir_check";
 
-/* Use project configuration menu (idf.py menuconfig) to choose the GPIO to blink,
-   or you can edit the following line and set a number here.
-*/
-#define BLINK_GPIO CONFIG_BLINK_GPIO
+/* 舵机名称 */
+static const char *s_name[SERVO_COUNT] = {
+    "BASE",
+    "JOINT1",
+    "JOINT2",
+    "JOINT3",
+    "ROTATE",
+    "GRIPPER",
+};
 
-static uint8_t s_led_state = 0;
+/* 每个舵机在 0° 和 180° 时期望的串口输出说明 */
+static const char *s_expect_0[SERVO_COUNT] = {
+    "BASE     0° → 脉宽≈2350μs → 基座应停在'0°逻辑位置'",
+    "JOINT1   0° → 脉宽≈900μs  → 肩关节应停在'0°逻辑位置'",
+    "JOINT2   0° → 脉宽≈1900μs → 肘关节应停在'0°逻辑位置'",
+    "JOINT3   固定 1080μs，跳过测试",
+    "ROTATE   固定 1460μs，跳过测试",
+    "GRIPPER  0° → 脉宽≈1440μs → 夹爪应完全打开",
+};
 
-#ifdef CONFIG_BLINK_LED_STRIP
+static const char *s_expect_180[SERVO_COUNT] = {
+    "BASE     180° → 脉宽≈980μs  → 基座应停在'180°逻辑位置'",
+    "JOINT1   180° → 脉宽≈2180μs → 肩关节应停在'180°逻辑位置'",
+    "JOINT2   180° → 脉宽≈800μs  → 肘关节应停在'180°逻辑位置'",
+    "JOINT3   固定，跳过",
+    "ROTATE   固定，跳过",
+    "GRIPPER  180° → 脉宽≈2110μs → 夹爪应完全闭合",
+};
 
-static led_strip_handle_t led_strip;
-
-static void blink_led(void)
-{
-    /* If the addressable LED is enabled */
-    if (s_led_state)
-    {
-        /* Set the LED pixel using RGB from 0 (0%) to 255 (100%) for each color */
-        led_strip_set_pixel(led_strip, 0, 16, 16, 16);
-        /* Refresh the strip to send data */
-        led_strip_refresh(led_strip);
-    }
-    else
-    {
-        /* Set all LED off to clear all pixels */
-        led_strip_clear(led_strip);
-    }
-}
-
-static void configure_led(void)
-{
-    ESP_LOGI(TAG, "Example configured to blink addressable LED!");
-    /* LED strip initialization with the GPIO and pixels number*/
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = BLINK_GPIO,
-        .max_leds = 1, // at least one LED on board
-    };
-#if CONFIG_BLINK_LED_STRIP_BACKEND_RMT
-    led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz
-        .flags.with_dma = false,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-#elif CONFIG_BLINK_LED_STRIP_BACKEND_SPI
-    led_strip_spi_config_t spi_config = {
-        .spi_bus = SPI2_HOST,
-        .flags.with_dma = true,
-    };
-    ESP_ERROR_CHECK(led_strip_new_spi_device(&strip_config, &spi_config, &led_strip));
-#else
-#error "unsupported LED strip backend"
-#endif
-    /* Set all LED off to clear all pixels */
-    led_strip_clear(led_strip);
-}
-
-#elif CONFIG_BLINK_LED_GPIO
-
-static void blink_led(void)
-{
-    /* Set the GPIO level according to the state (LOW or HIGH)*/
-    gpio_set_level(BLINK_GPIO, s_led_state);
-}
-
-static void configure_led(void)
-{
-    ESP_LOGI(TAG, "Example configured to blink GPIO LED!");
-    gpio_reset_pin(BLINK_GPIO);
-    /* Set the GPIO as a push/pull output */
-    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-}
-
-#else
-#error "unsupported LED type"
-#endif
-
-/*=======================================================
- *  pick_and_place() — 夹取→提起→旋转→放下 完整动作序列
+/*-----------------------------------------------------
+ *  test_one_servo() — 测试单个舵机的方向
  *
- *  使用 move_servo_to (单舵) 和 move_multi_to (多舵并行)
- *  平滑移动各舵机到目标脉宽。
- *
- *  ★ 重要: sweep_pulse 是校准扫描工具，不是"移动到目标位置"函数！
- *    - sweep_pulse 会正向扫到 max_pulse 再反向扫回 min_pulse
- *    - 最终停在 min_pulse，无法用于定点运动
- *    - 执行动作序列必须使用 move_servo_to / move_multi_to
- *
- *  脉宽值说明 (上电实测后修正):
- *    BASE:   2350=取料位, 1110=放置位
- *    JOINT1: 900=低位, 1540=高位(提起)
- *    JOINT2: 1900=低位, 1500=高位(提起)
- *    JOINT3: 1080=取料姿态
- *    ROTATE: 1460=取料姿态
- *    GRIPPER: 1440=张开, 2110=闭合
- *=======================================================*/
-static void pick_and_place(void)
+ *  依次设置 0° → 180° → HOME，每步等 2 秒。
+ *  跳过固定关节 (MIN==MAX)。
+ *-----------------------------------------------------*/
+static void test_one_servo(ServoID_t id)
 {
-#define MOVE_STEP_US 10 /* 步进精度: 10μs */
-#define MOVE_WAIT_MS 30 /* 每步间隔: 30ms */
-
-    /*--- Phase 1: 多舵机并行移动到取料位 ---*/
-    ESP_LOGI(TAG, "\n===== Phase 1: 移动到取料位 =====");
+    /* 跳过固定关节 */
+    uint32_t min_pulse, max_pulse;
+    servo_get_pulse_range(id, &min_pulse, &max_pulse);
+    if (min_pulse == max_pulse)
     {
-        const ServoID_t ids[] = {
-            SERVO_ID_BASE, SERVO_ID_JOINT1, SERVO_ID_JOINT2,
-            SERVO_ID_JOINT3, SERVO_ID_ROTATE};
-        const uint32_t targets[] = {2350, 900, 1900, 1080, 1460};
-        move_multi_to(ids, targets, 5, MOVE_STEP_US, MOVE_WAIT_MS);
+        ESP_LOGW(TAG, "[%s] 固定关节 (MIN=MAX=%luμs)，跳过方向测试\n",
+                 s_name[id], min_pulse);
+        return;
     }
 
-    /*--- Phase 2: 爪子闭合 — 夹取物体 (2110μs=闭合) ---*/
-    ESP_LOGI(TAG, "\n===== Phase 2: 夹取 (闭合夹爪) =====");
-    move_servo_to(SERVO_ID_GRIPPER, 2110, MOVE_STEP_US, MOVE_WAIT_MS);
+    ESP_LOGI(TAG, "\n========================================");
+    ESP_LOGI(TAG, "  测试 [%s]  方向=%d", s_name[id],
+             (int)(id == SERVO_ID_BASE || id == SERVO_ID_JOINT2 ? -1 : +1));
+    ESP_LOGI(TAG, "========================================");
 
-    /*--- Phase 3: 提起 — 肩关节+肘关节并行抬升 ---*/
-    ESP_LOGI(TAG, "\n===== Phase 3: 提起物体 =====");
+    /* Step 1: 0° */
+    ESP_LOGI(TAG, "\n>>> 设置 %s = 0°", s_name[id]);
+    ESP_LOGI(TAG, "    期望: %s", s_expect_0[id]);
+    test_angle(id, 0.0f);
+    ESP_LOGI(TAG, "    观察舵机是否到达'0°位置'，等待 2 秒...\n");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    /* Step 2: 180° */
+    ESP_LOGI(TAG, ">>> 设置 %s = 180°", s_name[id]);
+    ESP_LOGI(TAG, "    期望: %s", s_expect_180[id]);
+    test_angle(id, 180.0f);
+    ESP_LOGI(TAG, "    观察舵机是否到达'180°位置'，等待 2 秒...\n");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    /* Step 3: 回到 HOME */
+    float home;
+    switch (id)
     {
-        const ServoID_t ids[] = {SERVO_ID_JOINT1, SERVO_ID_JOINT2};
-        const uint32_t targets[] = {1540, 1500};
-        move_multi_to(ids, targets, 2, MOVE_STEP_US, MOVE_WAIT_MS);
+    case SERVO_ID_BASE:
+        home = SERVO_HOME_BASE;
+        break;
+    case SERVO_ID_JOINT1:
+        home = SERVO_HOME_JOINT1;
+        break;
+    case SERVO_ID_JOINT2:
+        home = SERVO_HOME_JOINT2;
+        break;
+    case SERVO_ID_GRIPPER:
+        home = SERVO_HOME_GRIPPER;
+        break;
+    default:
+        home = 90.0f;
+        break;
     }
+    ESP_LOGI(TAG, ">>> 回到 HOME (%.1f°)\n", home);
+    test_angle(id, home);
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    /*--- Phase 4: 旋转基座到放置位 ---*/
-    ESP_LOGI(TAG, "\n===== Phase 4: 旋转到放置位 =====");
-    move_servo_to(SERVO_ID_BASE, 980, MOVE_STEP_US, MOVE_WAIT_MS);
-
-    /*--- Phase 5: 下降 — 肩关节+肘关节并行下放 ---*/
-    ESP_LOGI(TAG, "\n===== Phase 5: 下放物体 =====");
-    {
-        const ServoID_t ids[] = {SERVO_ID_JOINT1, SERVO_ID_JOINT2};
-        const uint32_t targets[] = {900, 1900};
-        move_multi_to(ids, targets, 2, MOVE_STEP_US, MOVE_WAIT_MS);
-    }
-
-    /*--- Phase 6: 爪子张开 — 释放物体 (1440μs=张开) ---*/
-    ESP_LOGI(TAG, "\n===== Phase 6: 释放 (张开夹爪) =====");
-    move_servo_to(SERVO_ID_GRIPPER, 1440, MOVE_STEP_US, MOVE_WAIT_MS);
-
-    ESP_LOGI(TAG, "\n===== 夹取→放置 动作序列完成 =====\n");
-
-#undef MOVE_STEP_US
-#undef MOVE_WAIT_MS
+    ESP_LOGI(TAG, "--- [%s] 测试完成 ---\n", s_name[id]);
 }
+
+/*-----------------------------------------------------
+ *  判断逻辑 (写在这里方便你对照):
+ *
+ *  如果 test_angle(0°) 时舵机到了你定义的 0° 位置，
+ *  且 test_angle(180°) 时舵机到了 180° 位置，
+ *  → 方向符号正确。
+ *
+ *  如果反了（0° 时舵机跑到 180° 位置），
+ *  → 把 SERVO_DIR_xxx 取反 (+1 改 -1, -1 改 +1)。
+ *-----------------------------------------------------*/
 
 void app_main(void)
 {
-    /*=== 舵机校准区 (改参数后重新编译烧录即可) ===*/
+    ESP_LOGI(TAG, "\n");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "   舵机方向符号验证程序");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "即将逐个测试 BASE、JOINT1、JOINT2、GRIPPER");
+    ESP_LOGI(TAG, "每个舵机: 0°(等2秒) → 180°(等2秒) → HOME");
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "观察要点:");
+    ESP_LOGI(TAG, "  test_angle(0°)   时舵机是否停在你的'0°逻辑位置'?");
+    ESP_LOGI(TAG, "  test_angle(180°) 时舵机是否停在你的'180°逻辑位置'?");
+    ESP_LOGI(TAG, "  两次都对 → 方向正确");
+    ESP_LOGI(TAG, "  两次都反 → 方向符号取反");
+    ESP_LOGI(TAG, "");
 
-    /* 初始化舵机硬件 */
+    /* 初始化硬件 */
     test_init();
-
-    /* 打印所有舵机初始状态 */
     test_print_status();
 
-    /*
-     * ★ 测试模式选择 —— 取消注释需要的模式 ★
-     */
+    /* 逐个测试 */
+    test_one_servo(SERVO_ID_BASE);
+    test_one_servo(SERVO_ID_JOINT1);
+    test_one_servo(SERVO_ID_JOINT2);
+    test_one_servo(SERVO_ID_GRIPPER);
 
-    /*--- 模式1: 预定义动作序列 (Phase1~5) ---*/
-    // action_sequence();
+    /* JOINT3 和 ROTATE 是固定关节，自动跳过 */
 
-    /*--- 模式2: 夹取→提起→旋转→放下 (当前启用) ---*/
-    pick_and_place();
+    ESP_LOGI(TAG, "\n========================================");
+    ESP_LOGI(TAG, "   全部测试完成");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "如果某个舵机方向反了，修改 servo_cfg.h 中");
+    ESP_LOGI(TAG, "对应的 SERVO_DIR_xxx 符号后重新编译烧录。");
 
-    /* 扫描结束后打印状态 */
     test_print_status();
 
-    /* 每秒打印一次所有舵机状态 */
     while (1)
     {
-        test_print_status();
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-
-#if 0
-    /*--- LED 测试 (默认关闭) ---*/
-    configure_led();
-    while (1)
-    {
-        ESP_LOGI(TAG, "Turning the LED %s!", s_led_state == true ? "ON" : "OFF");
-        blink_led();
-        s_led_state = !s_led_state;
-        vTaskDelay(CONFIG_BLINK_PERIOD / portTICK_PERIOD_MS);
-    }
-#endif
 }

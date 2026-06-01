@@ -10,7 +10,7 @@
  *=====================================================*/
 
 /*------ 舵机数量 ------*/
-#define SERVO_COUNT 6
+#define SERVO_COUNT 7
 
 /*------ 舵机 ID 枚举 (0-based, 用于数组索引) ------*/
 typedef enum
@@ -21,6 +21,7 @@ typedef enum
     SERVO_ID_JOINT3 = 3,  /* IO12 腕关节   */
     SERVO_ID_ROTATE = 4,  /* IO11 夹子旋转 */
     SERVO_ID_GRIPPER = 5, /* IO10 夹子开合 (ZP15S) */
+    SERVO_ID_EXTRA = 6,   /* IO9  扩展舵机 */
 } ServoID_t;
 
 /*------ GPIO 引脚映射 (与全局引脚宪法一致) ------*/
@@ -30,14 +31,16 @@ typedef enum
 #define SERVO_GPIO_JOINT3 12  /* IO12 */
 #define SERVO_GPIO_ROTATE 11  /* IO11 */
 #define SERVO_GPIO_GRIPPER 10 /* IO10 */
+#define SERVO_GPIO_EXTRA 9    /* IO9  */
 
-/*------ LEDC 通道映射 (CH0~CH5) ------*/
+/*------ LEDC 通道映射 (CH0~CH6) ------*/
 #define SERVO_CH_BASE 0
 #define SERVO_CH_JOINT1 1
 #define SERVO_CH_JOINT2 2
 #define SERVO_CH_JOINT3 3
 #define SERVO_CH_ROTATE 4
 #define SERVO_CH_GRIPPER 5
+#define SERVO_CH_EXTRA 6
 
 /*------ LEDC 定时器参数 ------*/
 #define SERVO_LEDC_SPEED LEDC_LOW_SPEED_MODE /* ESP32-P4 只有低速模式 */
@@ -69,6 +72,9 @@ typedef enum
 /* ZP15S 夹爪 */
 #define SERVO_PULSE_MIN_GRIPPER 500
 #define SERVO_PULSE_MAX_GRIPPER 2500
+/* 扩展舵机 */
+#define SERVO_PULSE_MIN_EXTRA 500
+#define SERVO_PULSE_MAX_EXTRA 2500
 
 /*------ 占空比边界 (编译期预计算，每舵机独立) ------
  *  duty = pulse_us / period_us × (2^bits)
@@ -85,6 +91,8 @@ typedef enum
 #define SERVO_DUTY_MAX_ROTATE ((uint32_t)((uint64_t)SERVO_PULSE_MAX_ROTATE * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
 #define SERVO_DUTY_MIN_GRIPPER ((uint32_t)((uint64_t)SERVO_PULSE_MIN_GRIPPER * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
 #define SERVO_DUTY_MAX_GRIPPER ((uint32_t)((uint64_t)SERVO_PULSE_MAX_GRIPPER * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MIN_EXTRA ((uint32_t)((uint64_t)SERVO_PULSE_MIN_EXTRA * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
+#define SERVO_DUTY_MAX_EXTRA ((uint32_t)((uint64_t)SERVO_PULSE_MAX_EXTRA * (1UL << SERVO_PWM_BITS) / SERVO_PERIOD_US))
 
 /*------ 安全限位 (度) ------
  *  每个关节物理行程不同，上电后必须实测修正。
@@ -99,11 +107,12 @@ typedef enum
  *  根据实际组装姿态调整。
  *----------------------------------------------*/
 #define SERVO_HOME_BASE 90.0f
-#define SERVO_HOME_JOINT1 45.0f
+#define SERVO_HOME_JOINT1 81.0f /* 对应 1400μs，动作序列初始值 */
 #define SERVO_HOME_JOINT2 135.0f
 #define SERVO_HOME_JOINT3 90.0f
 #define SERVO_HOME_ROTATE 90.0f
 #define SERVO_HOME_GRIPPER 0.0f /* 0=全开 (ZP15S) */
+#define SERVO_HOME_EXTRA 90.0f  /* 扩展舵机中位 */
 
 /*=======================================================
  *  五次多项式缓动 (Quintic Easing) 配置
@@ -144,6 +153,7 @@ typedef enum
 #define SERVO_EASING_JOINT3_MS 800
 #define SERVO_EASING_ROTATE_MS 600
 #define SERVO_EASING_GRIPPER_MS 600
+#define SERVO_EASING_EXTRA_MS 600
 
 /*=======================================================
  *  查表辅助宏
@@ -155,29 +165,34 @@ typedef enum
  *  维护规则: 元素顺序必须严格对应 ServoID_t 枚举顺序。
  *=======================================================*/
 
-#define SERVO_DUTY_MIN_TBL                         \
-    {SERVO_DUTY_MIN_BASE, SERVO_DUTY_MIN_JOINT1,   \
-     SERVO_DUTY_MIN_JOINT2, SERVO_DUTY_MIN_JOINT3, \
-     SERVO_DUTY_MIN_ROTATE, SERVO_DUTY_MIN_GRIPPER}
+#define SERVO_DUTY_MIN_TBL                          \
+    {SERVO_DUTY_MIN_BASE, SERVO_DUTY_MIN_JOINT1,    \
+     SERVO_DUTY_MIN_JOINT2, SERVO_DUTY_MIN_JOINT3,  \
+     SERVO_DUTY_MIN_ROTATE, SERVO_DUTY_MIN_GRIPPER, \
+     SERVO_DUTY_MIN_EXTRA}
 
-#define SERVO_DUTY_MAX_TBL                         \
-    {SERVO_DUTY_MAX_BASE, SERVO_DUTY_MAX_JOINT1,   \
-     SERVO_DUTY_MAX_JOINT2, SERVO_DUTY_MAX_JOINT3, \
-     SERVO_DUTY_MAX_ROTATE, SERVO_DUTY_MAX_GRIPPER}
+#define SERVO_DUTY_MAX_TBL                          \
+    {SERVO_DUTY_MAX_BASE, SERVO_DUTY_MAX_JOINT1,    \
+     SERVO_DUTY_MAX_JOINT2, SERVO_DUTY_MAX_JOINT3,  \
+     SERVO_DUTY_MAX_ROTATE, SERVO_DUTY_MAX_GRIPPER, \
+     SERVO_DUTY_MAX_EXTRA}
 
-#define SERVO_PULSE_MIN_TBL                          \
-    {SERVO_PULSE_MIN_BASE, SERVO_PULSE_MIN_JOINT1,   \
-     SERVO_PULSE_MIN_JOINT2, SERVO_PULSE_MIN_JOINT3, \
-     SERVO_PULSE_MIN_ROTATE, SERVO_PULSE_MIN_GRIPPER}
+#define SERVO_PULSE_MIN_TBL                           \
+    {SERVO_PULSE_MIN_BASE, SERVO_PULSE_MIN_JOINT1,    \
+     SERVO_PULSE_MIN_JOINT2, SERVO_PULSE_MIN_JOINT3,  \
+     SERVO_PULSE_MIN_ROTATE, SERVO_PULSE_MIN_GRIPPER, \
+     SERVO_PULSE_MIN_EXTRA}
 
-#define SERVO_PULSE_MAX_TBL                          \
-    {SERVO_PULSE_MAX_BASE, SERVO_PULSE_MAX_JOINT1,   \
-     SERVO_PULSE_MAX_JOINT2, SERVO_PULSE_MAX_JOINT3, \
-     SERVO_PULSE_MAX_ROTATE, SERVO_PULSE_MAX_GRIPPER}
+#define SERVO_PULSE_MAX_TBL                           \
+    {SERVO_PULSE_MAX_BASE, SERVO_PULSE_MAX_JOINT1,    \
+     SERVO_PULSE_MAX_JOINT2, SERVO_PULSE_MAX_JOINT3,  \
+     SERVO_PULSE_MAX_ROTATE, SERVO_PULSE_MAX_GRIPPER, \
+     SERVO_PULSE_MAX_EXTRA}
 
-#define SERVO_EASING_MS_TBL                          \
-    {SERVO_EASING_BASE_MS, SERVO_EASING_JOINT1_MS,   \
-     SERVO_EASING_JOINT2_MS, SERVO_EASING_JOINT3_MS, \
-     SERVO_EASING_ROTATE_MS, SERVO_EASING_GRIPPER_MS}
+#define SERVO_EASING_MS_TBL                           \
+    {SERVO_EASING_BASE_MS, SERVO_EASING_JOINT1_MS,    \
+     SERVO_EASING_JOINT2_MS, SERVO_EASING_JOINT3_MS,  \
+     SERVO_EASING_ROTATE_MS, SERVO_EASING_GRIPPER_MS, \
+     SERVO_EASING_EXTRA_MS}
 
 #endif /* SERVO_CFG_H */

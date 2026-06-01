@@ -48,6 +48,7 @@ static const ledc_channel_t s_channel_tbl[SERVO_COUNT] = {
     SERVO_CH_JOINT3,
     SERVO_CH_ROTATE,
     SERVO_CH_GRIPPER,
+    SERVO_CH_EXTRA,
 };
 
 /*------ 内部工具函数 (与 servo_write_hardware 紧邻，位置不可移动) ------*/
@@ -112,6 +113,7 @@ void servo_set_init(void)
         SERVO_HOME_JOINT3,
         SERVO_HOME_ROTATE,
         SERVO_HOME_GRIPPER,
+        SERVO_HOME_EXTRA,
     };
 
     for (int i = 0; i < SERVO_COUNT; i++)

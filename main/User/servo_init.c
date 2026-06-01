@@ -23,6 +23,7 @@ static const float s_home_angles[SERVO_COUNT] = {
     SERVO_HOME_JOINT3,
     SERVO_HOME_ROTATE,
     SERVO_HOME_GRIPPER,
+    SERVO_HOME_EXTRA,
 };
 
 /*------ 舵机 LEDC 通道查表 (仅本文件使用) ------*/
@@ -33,6 +34,7 @@ static const ledc_channel_t s_servo_chs[SERVO_COUNT] = {
     SERVO_CH_JOINT3,
     SERVO_CH_ROTATE,
     SERVO_CH_GRIPPER,
+    SERVO_CH_EXTRA,
 };
 
 /*------ 舵机 GPIO 查表 (仅本文件使用) ------*/
@@ -43,13 +45,14 @@ static const int s_servo_gpios[SERVO_COUNT] = {
     SERVO_GPIO_JOINT3,
     SERVO_GPIO_ROTATE,
     SERVO_GPIO_GRIPPER,
+    SERVO_GPIO_EXTRA,
 };
 
 /*=====================================================
  *  servo_init()
  *
  *  1. 配置 LEDC Timer0: 50Hz, 12-bit
- *  2. 配置 6 路 Channel，每路绑定各自 GPIO
+ *  2. 配置 7 路 Channel，每路绑定各自 GPIO
  *  3. 立即写入 HOME 安全姿态
  *
  *  返回 ESP_OK 成功，否则失败后打印错误日志。
@@ -74,7 +77,7 @@ esp_err_t servo_init(void)
         return ret;
     }
 
-    /*--- Step 2: 6 路 Channel ---*/
+    /*--- Step 2: 7 路 Channel ---*/
     for (int i = 0; i < SERVO_COUNT; i++)
     {
         /* 调用 servo_util 的函数，删除了本文件内部的 static angle_to_duty */

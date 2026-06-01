@@ -1,2 +1,7 @@
 idf_component_register(SRCS "main.c"
-                       INCLUDE_DIRS ".")
+                              "User/servo_init.c"
+                              "User/servo_set.c"
+                              "User/servo_util.c"
+                              "User/test.c"
+                       INCLUDE_DIRS "."
+                                     "User")

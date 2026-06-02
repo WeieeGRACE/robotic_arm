@@ -21,7 +21,13 @@ void app_main(void)
     /* 2. 初始化五次多项式缓动系统 */
     servo_set_init();
 
-    ESP_LOGI(TAG, "系统就绪，保持安全姿态");
+    /* 3. 运动到目标姿态: Joint1=0°, Joint2=180° */
+    ESP_LOGI(TAG, "运动至目标姿态: Joint1=0° Joint2=180°");
+    servo_set_angle(SERVO_ID_JOINT1, 0.0f);
+    servo_set_angle(SERVO_ID_JOINT2, 90.0f);
+    vTaskDelay(pdMS_TO_TICKS(2000)); /* 等待缓动完成 */
+
+    ESP_LOGI(TAG, "系统就绪，保持目标姿态");
 
     /* 主循环 — 等待后续控制指令（手柄/UART/视觉） */
     while (1)

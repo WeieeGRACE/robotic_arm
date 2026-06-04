@@ -289,3 +289,81 @@ void arm_control_pick_and_place_low(void)
 
     ESP_LOGI(TAG, "=== IK pick-and-place done ===");
 }
+
+/*-----------------------------------------------------
+ *  通用抓取-放置: 直接舵机角抓取+放置, IK抬臂过渡
+ *-----------------------------------------------------*/
+static void pick_and_place_at(float j1, float j2, float j3,
+                              float base_pick, float base_place,
+                              const char *label)
+{
+    ESP_LOGI(TAG, "=== Pick&Place [%s] start ===", label);
+
+    /* Step 1: 直接舵机角抓取 */
+    ESP_LOGI(TAG, "[%s] Step1: Pick (j1=%.0f j2=%.0f j3=%.0f base=%.0f)",
+             label, (double)j1, (double)j2, (double)j3, (double)base_pick);
+    servo_set_angle(SERVO_ID_BASE,    base_pick);
+    servo_set_angle(SERVO_ID_JOINT1,  j1);
+    servo_set_angle(SERVO_ID_JOINT2,  j2);
+    servo_set_angle(SERVO_ID_JOINT3,  j3);
+    servo_set_angle(SERVO_ID_GRIPPER, 0.0f);
+    wait_all_servos_idle();
+
+    /* Step 2: 夹取 */
+    ESP_LOGI(TAG, "[%s] Step2: Grab", label);
+    arm_control_set_gripper(100.0f);
+
+    /* Step 3: IK 抬臂到安全高度 */
+    ESP_LOGI(TAG, "[%s] Step3: Lift", label);
+    arm_control_move_to(200.0f, 0.0f, 350.0f);
+
+    /* Step 4: 旋转底座 */
+    ESP_LOGI(TAG, "[%s] Step4: Rotate base %.0f->%.0f",
+             label, (double)base_pick, (double)base_place);
+    arm_control_set_base_safe(base_place);
+
+    /* Step 5: 直接舵机角放置 */
+    ESP_LOGI(TAG, "[%s] Step5: Place", label);
+    servo_set_angle(SERVO_ID_JOINT1,  j1);
+    servo_set_angle(SERVO_ID_JOINT2,  j2);
+    servo_set_angle(SERVO_ID_JOINT3,  j3);
+    wait_all_servos_idle();
+
+    /* Step 6: 释放 */
+    ESP_LOGI(TAG, "[%s] Step6: Release", label);
+    arm_control_set_gripper(0.0f);
+
+    ESP_LOGI(TAG, "=== Pick&Place [%s] done ===", label);
+}
+
+/*-----------------------------------------------------
+ *  多点抓取测试 — 5 个不同高度/距离, 全部 yaw=0
+ *-----------------------------------------------------*/
+void arm_control_multi_pick_and_place(void)
+{
+    /* 点1: 低远 — (288, 0, 61) */
+    pick_and_place_at(0.0f, 0.0f, 60.0f, 0.0f, 180.0f, "P1-low");
+
+    /* 抬臂回安全位再继续 */
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+
+    /* 点2: 中低 — (324, 0, 104) */
+    pick_and_place_at(0.0f, 40.0f, 80.0f, 0.0f, 180.0f, "P2-midlow");
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+
+    /* 点3: 中等 — (331, 0, 131) */
+    pick_and_place_at(0.0f, 60.0f, 90.0f, 0.0f, 180.0f, "P3-mid");
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+
+    /* 点4: 中高 — (320, 0, 186) */
+    pick_and_place_at(0.0f, 100.0f, 110.0f, 0.0f, 180.0f, "P4-midhigh");
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+
+    /* 点5: 高近 — (164, 0, 293) */
+    pick_and_place_at(40.0f, 160.0f, 163.0f, 0.0f, 180.0f, "P5-high");
+
+    /* 回 HOME */
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+    arm_control_init();
+    ESP_LOGI(TAG, "=== All 5 pick-and-place tests done ===");
+}

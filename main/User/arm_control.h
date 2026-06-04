@@ -89,6 +89,11 @@ extern "C"
      */
     void arm_control_pick_and_place_low(void);
 
+    /**
+     * @brief 多点抓取测试 — 5个不同高度/距离, 全部yaw=0水平抓取
+     */
+    void arm_control_multi_pick_and_place(void);
+
     /*-----------------------------------------------------
      *  状态查询
      *-----------------------------------------------------*/

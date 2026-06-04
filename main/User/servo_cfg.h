@@ -136,7 +136,7 @@ typedef enum
  *=======================================================*/
 #define SERVO_EASING_TICK_MS 20
 #define SERVO_EASING_DURATION_MS 1000 /* 默认，已被下方覆盖 */
-#define SERVO_EASING_BASE_MS 8000     /* 8s — 手动提速 3× (原 25000) */
+#define SERVO_EASING_BASE_MS 4000     /* 4s — 再提速 2× (原 8000) */
 #define SERVO_EASING_JOINT1_MS 5000   /*  5s (原 1000) */
 #define SERVO_EASING_JOINT2_MS 5000
 #define SERVO_EASING_JOINT3_MS 4000

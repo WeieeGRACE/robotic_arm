@@ -27,7 +27,7 @@ void app_main(void)
 
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    arm_control_pick_and_place_low();
+    arm_control_multi_pick_and_place();
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  测试完成!");

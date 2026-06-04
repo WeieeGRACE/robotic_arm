@@ -55,7 +55,9 @@ typedef enum
  *         -1 = 脉宽减小逻辑时角度增大（反向）
  *=======================================================*/
 
-/* Base: 逻辑 0° → 2350μs，逻辑 180° → 980μs (反向) */
+/* Base: 逻辑 0° → 2350μs，逻辑 180° → 980μs (反向)
+ *       现在定义：舵机 180° 时基座朝正前方。
+ */
 #define SERVO_PULSE_MIN_BASE 980
 #define SERVO_PULSE_MAX_BASE 2350
 #define SERVO_DIR_BASE -1
@@ -66,15 +68,16 @@ typedef enum
 #define SERVO_PULSE_MAX_JOINT1 2180
 #define SERVO_DIR_JOINT1 1
 
-/* Joint2: 逻辑 0° → 1900μs，逻辑 180° → 800μs (反向) */
+/* Joint2: 逻辑 0° → 1900μs，逻辑 180° → 800μs (反向)
+ *         几何映射: θ2 = J2_OFFSET + J2_SCALE*servo2 (实测 -56 + 151/180*servo2) */
 #define SERVO_PULSE_MIN_JOINT2 800
 #define SERVO_PULSE_MAX_JOINT2 1900
 #define SERVO_DIR_JOINT2 -1
 
-/* Joint3: 固定于 1080μs（不参与运动，逻辑角度设为90°但无关紧要） */
-#define SERVO_PULSE_MIN_JOINT3 1080
-#define SERVO_PULSE_MAX_JOINT3 1080
-#define SERVO_DIR_JOINT3 1 /* 方向无实际作用 */
+/* Joint3: 释放为正常范围 500~2500，允许 IK 动态运动 */
+#define SERVO_PULSE_MIN_JOINT3 500
+#define SERVO_PULSE_MAX_JOINT3 2500
+#define SERVO_DIR_JOINT3 1 /* 待实测确认 */
 
 /* Rotate: 固定于 1460μs（不参与运动） */
 #define SERVO_PULSE_MIN_ROTATE 1460
@@ -109,31 +112,42 @@ typedef enum
 #define SERVO_ANGLE_MIN_DEG 0.0f
 #define SERVO_ANGLE_MAX_DEG 180.0f
 
-/*------ 上电安全姿态 (度) ------
- *  上电后: Base=0°, Joint1=90°, Joint2=90°,
- *         Joint3/Rotate 固定在各自脉宽，Gripper=0° (打开)
+/*------ HOME 姿态 (收拢低位) ------
+ *  大臂水平 (0°)，小臂收拢 (90°)，腕部待校准 (90°)，
+ *  Base 正前方 (0°)，Gripper 打开 (0°)
  *----------------------------------------------*/
 #define SERVO_HOME_BASE 0.0f
-#define SERVO_HOME_JOINT1 90.0f
-#define SERVO_HOME_JOINT2 90.0f
-#define SERVO_HOME_JOINT3 90.0f /* 固定关节，角度值不影响脉宽 (MIN=MAX) */
-#define SERVO_HOME_ROTATE 90.0f /* 固定关节，角度值不影响脉宽 (MIN=MAX) */
-#define SERVO_HOME_GRIPPER 0.0f /* 0° 打开 */
+#define SERVO_HOME_JOINT1 90.0f /* 竖直收拢 */
+#define SERVO_HOME_JOINT2 0.0f  /* 小臂折叠，几何角 -60° */
+#define SERVO_HOME_JOINT3 90.0f /* 腕部待校准 */
+#define SERVO_HOME_ROTATE 0.0f
+#define SERVO_HOME_GRIPPER 0.0f
+
+/* J3 角度映射 (servo0→156°, servo103→-17° 实测修正) */
+#define J3_OFFSET_DEG 93.0f
+#define J3_SCALE_DEG (-0.595f)
 
 /*=======================================================
  *  五次多项式缓动 (Quintic Easing) 配置
  *
  *  原理: s(τ) = 10τ³ - 15τ⁴ + 6τ⁵,  τ ∈ [0, 1]
  *  特性: 起止位置、速度、加速度全部连续且为零
+ *  所有时间已乘 5 倍以大幅降低运动速度
  *=======================================================*/
 #define SERVO_EASING_TICK_MS 20
 #define SERVO_EASING_DURATION_MS 1000 /* 默认，已被下方覆盖 */
-#define SERVO_EASING_BASE_MS 1200
-#define SERVO_EASING_JOINT1_MS 1000
-#define SERVO_EASING_JOINT2_MS 1000
-#define SERVO_EASING_JOINT3_MS 800
-#define SERVO_EASING_ROTATE_MS 600
-#define SERVO_EASING_GRIPPER_MS 600
+#define SERVO_EASING_BASE_MS 8000     /* 8s — 手动提速 3× (原 25000) */
+#define SERVO_EASING_JOINT1_MS 5000   /*  5s (原 1000) */
+#define SERVO_EASING_JOINT2_MS 5000
+#define SERVO_EASING_JOINT3_MS 4000
+#define SERVO_EASING_ROTATE_MS 3000
+#define SERVO_EASING_GRIPPER_MS 3000
+
+/*=======================================================
+ *  底座安全角度范围 (舵机逻辑角)
+ *=======================================================*/
+#define BASE_SAFE_MIN_DEG 0.0f
+#define BASE_SAFE_MAX_DEG 180.0f
 
 /*=======================================================
  *  查表辅助宏
@@ -165,7 +179,7 @@ typedef enum
      SERVO_EASING_JOINT2_MS, SERVO_EASING_JOINT3_MS, \
      SERVO_EASING_ROTATE_MS, SERVO_EASING_GRIPPER_MS}
 
-/* 新增：方向表 */
+/* 方向表 */
 #define SERVO_DIR_TBL                                    \
     {SERVO_DIR_BASE, SERVO_DIR_JOINT1, SERVO_DIR_JOINT2, \
      SERVO_DIR_JOINT3, SERVO_DIR_ROTATE, SERVO_DIR_GRIPPER}

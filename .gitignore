@@ -92,3 +92,17 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Secrets & environment — NEVER commit
+.env
+.env.*
+
+# AI assistant local files (do not push)
+.codegraph/
+reasonix.toml
+.clinerules
+.roomodes
+
+# IDE / editor
+.vscode/
+.idea/

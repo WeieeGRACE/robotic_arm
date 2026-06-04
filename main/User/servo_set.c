@@ -10,6 +10,9 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include <math.h>
+/* 已在文件头部包含 freertos/FreeRTOS.h 和 freertos/task.h，若没有则添加 */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "servo_set";
 
@@ -195,4 +198,44 @@ void servo_stop_all(void)
         s_state[i].is_active = false;
     }
     ESP_LOGI(TAG, "All servos stopped");
+}
+
+bool servo_is_easing(ServoID_t id)
+{
+    if (id < 0 || id >= SERVO_COUNT)
+        return false;
+    if (!s_initialized)
+        return false;
+    return s_state[id].is_active;
+}
+
+void servo_wait_all_idle(void)
+{
+    if (!s_initialized)
+        return;
+    uint32_t timeout_ms = 60000; /* 60秒超时 */
+    uint32_t wait_count = 0;
+    uint32_t max_count = timeout_ms / 50; /* 50ms 间隔 */
+    while (1)
+    {
+        bool any_active = false;
+        for (int i = 0; i < SERVO_COUNT; i++)
+        {
+            if (s_state[i].is_active)
+            {
+                any_active = true;
+                break;
+            }
+        }
+        if (!any_active)
+            break;
+        if (wait_count >= max_count)
+        {
+            ESP_LOGE(TAG, "servo_wait_all_idle TIMEOUT! waited=%lu counts",
+                     (unsigned long)wait_count);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50)); /* 50ms 间隔降低CPU占用 */
+        wait_count++;
+    }
 }

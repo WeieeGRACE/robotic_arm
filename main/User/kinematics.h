@@ -31,20 +31,21 @@ extern "C"
 /*-----------------------------------------------------
  *  机械尺寸参数 (单位: mm)
  *-----------------------------------------------------*/
-#define ARM_D1 13.0f  /* Base 转轴到 J1 转轴垂直高 */
-#define ARM_L1 104.0f /* 上臂长 (J1 转轴 -> J2 转轴) */
-#define ARM_L2 97.0f  /* 前臂长 (J2 转轴 -> J3 转轴) */
-#define ARM_L3 63.0f  /* 末端长 (J3 转轴 -> Rotate 中心) */
+#define ARM_BASE_HEIGHT 128.0f                   /* 实测: 云台离地141 - J1偏移13 = 128 */
+#define ARM_J1_OFFSET 13.0f                      /* Base 转轴到 J1 转轴 */
+#define ARM_D1 (ARM_BASE_HEIGHT + ARM_J1_OFFSET) /* J1 转轴离地高度 = 148mm */
+#define ARM_L1 104.0f                            /* 上臂长 (J1 转轴 -> J2 转轴) */
+#define ARM_L2 97.0f                             /* 前臂长 (J2 转轴 -> J3 转轴) */
+#define ARM_L3 130.0f                            /* 末端长 (J3 转轴 -> 夹爪抓取中心) — 实测 */
 
 /*-----------------------------------------------------
  *  J2 角度映射参数 (线性关系)
  *   θ2 = J2_OFFSET + J2_SCALE * servo2
  *-----------------------------------------------------*/
-#define J2_OFFSET_DEG (-60.0f)
-#define J2_SCALE (152.0f / 180.0f) /* ≈ 0.8444 */
+#define J2_OFFSET_DEG (-56.0f)   /* 实测: servo2=0° → θ2=-56° */
+#define J2_SCALE (151.0f / 180.0f) /* 实测: (95-(-56))/180 ≈ 0.8389 */
 
-/* J3 固定几何角 (度) */
-#define J3_FIXED_GEOM_DEG 60.0f
+    /* J3 不再固定，由 IK 动态求解 */
 
     /*-----------------------------------------------------
      *  数据结构
@@ -58,7 +59,7 @@ extern "C"
         float theta0; /* Base 水平旋转 (逆时针为正) */
         float theta1; /* J1 绝对俯仰 (0°=水平前伸) */
         float theta2; /* J2 相对角 (伸直0°) */
-        float theta3; /* J3 相对角 (固定60°) */
+        float theta3; /* J3 相对角 (动态, IK 求解) */
         float theta4; /* Rotate (暂未用) */
     } JointAngles_t;
 
@@ -68,9 +69,9 @@ extern "C"
     typedef struct
     {
         float servo0; /* Base */
-        float servo1;
-        float servo2;
-        float servo3; /* 固定 */
+        float servo1; /* Joint1 */
+        float servo2; /* Joint2 */
+        float servo3; /* Joint3 (动态) */
         float servo4; /* Rotate (暂未用) */
         float servo5; /* Gripper (暂未用) */
     } ServoAngles_t;
@@ -83,7 +84,7 @@ extern "C"
         float x;   /* 世界坐标 X (mm) */
         float y;   /* 世界坐标 Y (mm) */
         float z;   /* 世界坐标 Z (mm) */
-        float yaw; /* 末端连杆俯仰角 (度, 水平=0) */
+        float yaw; /* 末端连杆俯仰角 (度, 水平=0, IK 期望输入) */
     } ArmTipState_t;
 
     /*-----------------------------------------------------

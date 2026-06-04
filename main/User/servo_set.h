@@ -3,6 +3,19 @@
 
 #include "servo_cfg.h"
 
+/**
+ * @brief 检查指定舵机是否正在缓动
+ * @param id 舵机编号
+ * @return true 若正在缓动
+ */
+bool servo_is_easing(ServoID_t id);
+
+/**
+ * @brief 等待所有舵机缓动完成 (阻塞)
+ *        while 循环调用 servo_is_easing() 并延时 5ms
+ */
+void servo_wait_all_idle(void);
+
 #ifdef __cplusplus
 extern "C"
 {

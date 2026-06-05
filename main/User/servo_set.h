@@ -52,6 +52,12 @@ extern "C"
      */
     void servo_stop_all(void);
 
+    /**
+     * @brief 即时写入全部 6 轴角度 (绕过缓动, 直接写硬件)
+     *        用于轨迹插补等高频更新场景
+     */
+    void servo_set_joints_immediate(const float angles[SERVO_COUNT]);
+
 #ifdef __cplusplus
 }
 #endif

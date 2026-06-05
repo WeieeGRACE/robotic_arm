@@ -7,6 +7,9 @@
 #include "servo_cfg.h"
 #include "servo_set.h"
 #include "kinematics.h"
+#include "trajectory.h"
+#include "collision.h"
+#include "cartesian.h"
 #include "esp_log.h"
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -82,6 +85,14 @@ bool arm_control_move_to(float x, float y, float z)
         return false;
     }
 
+    /* 碰撞预检 */
+    CollisionResult_t cr = collision_check(&geom);
+    if (cr != COLLISION_OK)
+    {
+        ESP_LOGE(TAG, "Collision detected: %s — move rejected!", collision_str(cr));
+        return false;
+    }
+
     /* 转换为舵机角度并执行 */
     ServoAngles_t servo;
     kinematics_geom_to_servo(&geom, &servo);
@@ -108,10 +119,21 @@ void arm_control_set_base_safe(float base_servo_deg)
     /* 安全锁: 底座旋转前整条臂必须高于 J1 水平面 */
     ArmTipState_t tip;
     kinematics_forward(&s_geom_target, &tip);
-    if (tip.z < (ARM_D1 - 10.0f))
+    float d1 = kinematics_get_d1();
+    if (tip.z < (d1 - 10.0f))
     {
         ESP_LOGE(TAG, "BASE ROTATE BLOCKED: tip z=%.1f < D1=%.0f, "
-                 "请先抬臂到水平面以上!", (double)tip.z, (double)ARM_D1);
+                 "请先抬臂到水平面以上!", (double)tip.z, (double)d1);
+        return;
+    }
+
+    /* 碰撞检测: 底座旋转是否会扫过履带 */
+    CollisionResult_t cr = collision_check_rotate(
+        s_geom_target.theta0, base_servo_deg, &s_geom_target);
+    if (cr != COLLISION_OK)
+    {
+        ESP_LOGE(TAG, "BASE ROTATE BLOCKED: %s — 请抬臂后再旋转!",
+                 collision_str(cr));
         return;
     }
 
@@ -294,40 +316,58 @@ void arm_control_pick_and_place_low(void)
  *  通用抓取-放置: 直接舵机角抓取+放置, IK抬臂过渡
  *-----------------------------------------------------*/
 static void pick_and_place_at(float j1, float j2, float j3,
-                              float base_pick, float base_place,
-                              const char *label)
+                              float base_place, const char *label)
 {
     ESP_LOGI(TAG, "=== Pick&Place [%s] start ===", label);
 
-    /* Step 1: 直接舵机角抓取 */
-    ESP_LOGI(TAG, "[%s] Step1: Pick (j1=%.0f j2=%.0f j3=%.0f base=%.0f)",
-             label, (double)j1, (double)j2, (double)j3, (double)base_pick);
-    servo_set_angle(SERVO_ID_BASE,    base_pick);
+    /* Step 1: 在 base=0 (正前安全区) 摆出抓取姿态 */
+    ESP_LOGI(TAG, "[%s] Step1: Pose at base=0 (j1=%.0f j2=%.0f j3=%.0f)",
+             label, (double)j1, (double)j2, (double)j3);
     servo_set_angle(SERVO_ID_JOINT1,  j1);
     servo_set_angle(SERVO_ID_JOINT2,  j2);
     servo_set_angle(SERVO_ID_JOINT3,  j3);
     servo_set_angle(SERVO_ID_GRIPPER, 0.0f);
     wait_all_servos_idle();
+    s_geom_target.theta0 = 0.0f;
+    s_geom_target.theta1 = j1;
+    s_geom_target.theta2 = J2_OFFSET_DEG + J2_SCALE * j2;
+    s_geom_target.theta3 = (j3 - J3_OFFSET_DEG) / J3_SCALE_DEG;
 
     /* Step 2: 夹取 */
     ESP_LOGI(TAG, "[%s] Step2: Grab", label);
     arm_control_set_gripper(100.0f);
 
-    /* Step 3: IK 抬臂到安全高度 */
+    /* Step 3: IK 抬臂到安全高度 (避开履带) */
     ESP_LOGI(TAG, "[%s] Step3: Lift", label);
     arm_control_move_to(200.0f, 0.0f, 350.0f);
 
-    /* Step 4: 旋转底座 */
-    ESP_LOGI(TAG, "[%s] Step4: Rotate base %.0f->%.0f",
-             label, (double)base_pick, (double)base_place);
+    /* Step 4: 旋转底座到放置角 (抬升后安全) */
+    ESP_LOGI(TAG, "[%s] Step4: Rotate base to %.0f°", label, (double)base_place);
     arm_control_set_base_safe(base_place);
 
-    /* Step 5: 直接舵机角放置 */
-    ESP_LOGI(TAG, "[%s] Step5: Place", label);
-    servo_set_angle(SERVO_ID_JOINT1,  j1);
-    servo_set_angle(SERVO_ID_JOINT2,  j2);
-    servo_set_angle(SERVO_ID_JOINT3,  j3);
-    wait_all_servos_idle();
+    /* Step 5: 摆出放置姿态 — 若碰撞则自动抬肩 */
+    {
+        float safe_j1 = j1;
+        /* 逐步抬升 θ1 直到碰撞检测通过 */
+        for (int tries = 0; tries < 10; tries++) {
+            JointAngles_t test_geom = {
+                .theta0 = base_place,
+                .theta1 = safe_j1,
+                .theta2 = J2_OFFSET_DEG + J2_SCALE * j2,
+                .theta3 = (j3 - J3_OFFSET_DEG) / J3_SCALE_DEG,
+            };
+            if (collision_check(&test_geom) == COLLISION_OK) break;
+            safe_j1 += 5.0f; /* 每次抬 5° */
+            ESP_LOGW(TAG, "[%s] Place pose unsafe, lifting J1 to %.0f°",
+                     label, (double)safe_j1);
+        }
+        ESP_LOGI(TAG, "[%s] Step5: Place pose (j1=%.0f j2=%.0f j3=%.0f)",
+                 label, (double)safe_j1, (double)j2, (double)j3);
+        servo_set_angle(SERVO_ID_JOINT1,  safe_j1);
+        servo_set_angle(SERVO_ID_JOINT2,  j2);
+        servo_set_angle(SERVO_ID_JOINT3,  j3);
+        wait_all_servos_idle();
+    }
 
     /* Step 6: 释放 */
     ESP_LOGI(TAG, "[%s] Step6: Release", label);
@@ -342,28 +382,62 @@ static void pick_and_place_at(float j1, float j2, float j3,
 void arm_control_multi_pick_and_place(void)
 {
     /* 点1: 低远 — (288, 0, 61) */
-    pick_and_place_at(0.0f, 0.0f, 60.0f, 0.0f, 180.0f, "P1-low");
+    pick_and_place_at(0.0f, 0.0f, 60.0f, 180.0f, "P1-low");
 
-    /* 抬臂回安全位再继续 */
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    /* 点2: 中低 — (324, 0, 104) */
-    pick_and_place_at(0.0f, 40.0f, 80.0f, 0.0f, 180.0f, "P2-midlow");
+    pick_and_place_at(0.0f, 40.0f, 80.0f, 180.0f, "P2-midlow");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    /* 点3: 中等 — (331, 0, 131) */
-    pick_and_place_at(0.0f, 60.0f, 90.0f, 0.0f, 180.0f, "P3-mid");
+    pick_and_place_at(0.0f, 60.0f, 90.0f, 180.0f, "P3-mid");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    /* 点4: 中高 — (320, 0, 186) */
-    pick_and_place_at(0.0f, 100.0f, 110.0f, 0.0f, 180.0f, "P4-midhigh");
+    pick_and_place_at(0.0f, 100.0f, 110.0f, 180.0f, "P4-midhigh");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    /* 点5: 高近 — (164, 0, 293) */
-    pick_and_place_at(40.0f, 160.0f, 163.0f, 0.0f, 180.0f, "P5-high");
+    pick_and_place_at(40.0f, 160.0f, 163.0f, 180.0f, "P5-high");
 
     /* 回 HOME */
     arm_control_move_to(150.0f, 0.0f, 350.0f);
     arm_control_init();
-    ESP_LOGI(TAG, "=== All 5 pick-and-place tests done ===");
+
+    /*=== 轨迹插补演示: 3段平滑抓→抬→放 ===*/
+    ESP_LOGI(TAG, "=== Trajectory demo (3-segment smooth pick&place) ===");
+
+    /* 先到抓取位 */
+    servo_set_angle(SERVO_ID_BASE,    0.0f);   /* 正前安全区抓取 */
+    servo_set_angle(SERVO_ID_JOINT1,  0.0f);
+    servo_set_angle(SERVO_ID_JOINT2,  0.0f);
+    servo_set_angle(SERVO_ID_JOINT3,  60.0f);
+    servo_set_angle(SERVO_ID_GRIPPER, 0.0f);
+    wait_all_servos_idle();
+    arm_control_set_gripper(100.0f);
+
+    /* 3段轨迹: 抬升 → 旋转到135° → 放下 */
+    {
+        TrajPoint_t traj[3] = {
+            { .angles = {0.0f, 69.0f, 67.0f, 129.0f, 0.0f, 0.0f}, .duration_ms = 1500 },
+            { .angles = {180.0f, 69.0f, 67.0f, 129.0f, 0.0f, 0.0f}, .duration_ms = 2000 },
+            { .angles = {180.0f, 0.0f, 0.0f, 60.0f, 0.0f, 0.0f}, .duration_ms = 1500 },
+        };
+        traj_start(traj, 3);
+        traj_wait_done();
+    }
+
+    arm_control_set_gripper(0.0f);
+    ESP_LOGI(TAG, "=== Trajectory demo done ===");
+
+    /*=== 笛卡尔直线演示: 末端从高到低走直线 ===*/
+    ESP_LOGI(TAG, "=== Cartesian line demo ===");
+    arm_control_move_to(200.0f, 0.0f, 350.0f);
+    /* 从 (200,0,350) 直线走到 (300,0,120), 速度 80mm/s */
+    cartesian_move_to(300.0f, 0.0f, 120.0f, 80.0f);
+    /* 直线回到上方 */
+    cartesian_move_to(200.0f, 0.0f, 350.0f, 80.0f);
+    ESP_LOGI(TAG, "=== Cartesian line demo done ===");
+
+    /* 回 HOME */
+    arm_control_move_to(150.0f, 0.0f, 350.0f);
+    arm_control_init();
+    ESP_LOGI(TAG, "=== All tests done ===");
 }

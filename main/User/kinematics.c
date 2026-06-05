@@ -32,9 +32,52 @@ static inline float rad2deg(float r) { return r * 180.0f / PI; }
 #define SQ(x) ((x) * (x))
 #define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : ((v) > (hi) ? (hi) : (v)))
 
-static const float J2_OFFSET_VAL = J2_OFFSET_DEG; /* -60 */
-static const float J2_SCALE_VAL = J2_SCALE;       /* 152/180 */
-static const float INV_J2_SCALE = 1.0f / J2_SCALE;
+/* 运行时校准参数 — 可从 NVS 加载覆盖宏默认值 */
+static float J2_OFFSET_VAL = J2_OFFSET_DEG;
+static float J2_SCALE_VAL  = J2_SCALE;
+static float INV_J2_SCALE  = 1.0f / J2_SCALE;
+static float J3_OFFSET_VAL = J3_OFFSET_DEG;
+static float J3_SCALE_VAL  = J3_SCALE_DEG;
+static float ARM_D1_VAL     = ARM_D1;
+static float ARM_L3_VAL     = ARM_L3;
+
+#include "calib_nvs.h"
+
+void kinematics_load_calibration(void)
+{
+    CalibrationData_t calib;
+    if (calib_nvs_load(&calib) == ESP_OK)
+    {
+        J2_OFFSET_VAL = calib.j2_offset_deg;
+        J2_SCALE_VAL  = calib.j2_scale;
+        INV_J2_SCALE  = 1.0f / calib.j2_scale;
+        J3_OFFSET_VAL = calib.j3_offset_deg;
+        J3_SCALE_VAL  = calib.j3_scale;
+        ARM_D1_VAL    = calib.arm_d1;
+        ARM_L3_VAL    = calib.arm_l3;
+        ESP_LOGI(TAG, "Calibration loaded from NVS");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Using default calibration from servo_cfg.h");
+    }
+}
+
+void kinematics_save_calibration(void)
+{
+    CalibrationData_t calib = {
+        .j2_offset_deg = J2_OFFSET_VAL,
+        .j2_scale      = J2_SCALE_VAL,
+        .j3_offset_deg = J3_OFFSET_VAL,
+        .j3_scale      = J3_SCALE_VAL,
+        .arm_d1        = ARM_D1_VAL,
+        .arm_l3        = ARM_L3_VAL,
+    };
+    calib_nvs_save(&calib);
+}
+
+float kinematics_get_d1(void) { return ARM_D1_VAL; }
+float kinematics_get_l3(void) { return ARM_L3_VAL; }
 
 /*-----------------------------------------------------
  *  几何角 ↔ 舵机逻辑角 映射
@@ -55,7 +98,7 @@ void kinematics_geom_to_servo(const JointAngles_t *geom,
     servo->servo2 = (geom->theta2 - J2_OFFSET_VAL) * INV_J2_SCALE;
 
     /* θ3 → servo3: servo = θ3 * scale + offset (offset=100 时 -100°→0°, 80°→180°) */
-    servo->servo3 = geom->theta3 * J3_SCALE_DEG + J3_OFFSET_DEG;
+    servo->servo3 = geom->theta3 * J3_SCALE_VAL + J3_OFFSET_VAL;
 
     /* Rotate: servo4 = theta4 (无偏移, 全范围) */
     servo->servo4 = geom->theta4;
@@ -72,7 +115,7 @@ void kinematics_servo_to_geom(const ServoAngles_t *servo,
     geom->theta0 = servo->servo0;
     geom->theta1 = servo->servo1;
     geom->theta2 = J2_OFFSET_VAL + J2_SCALE_VAL * servo->servo2;
-    geom->theta3 = (servo->servo3 - J3_OFFSET_DEG) / J3_SCALE_DEG;
+    geom->theta3 = (servo->servo3 - J3_OFFSET_VAL) / J3_SCALE_VAL;
     geom->theta4 = servo->servo4;
 }
 
@@ -91,12 +134,12 @@ void kinematics_forward(const JointAngles_t *geom,
     float t3 = deg2rad(geom->theta3);
 
     /* 计算侧视平面内的坐标 (y_local = 0) */
-    float z_j2 = ARM_D1 + ARM_L1 * sinf(t1);
+    float z_j2 = ARM_D1_VAL + ARM_L1 * sinf(t1);
     float r_j2 = ARM_L1 * cosf(t1);
     float z_j3 = z_j2 + ARM_L2 * sinf(t1 + t2);
     float r_j3 = r_j2 + ARM_L2 * cosf(t1 + t2);
-    float z_tip = z_j3 + ARM_L3 * sinf(t1 + t2 + t3);
-    float r_plane = r_j3 + ARM_L3 * cosf(t1 + t2 + t3);
+    float z_tip = z_j3 + ARM_L3_VAL * sinf(t1 + t2 + t3);
+    float r_plane = r_j3 + ARM_L3_VAL * cosf(t1 + t2 + t3);
 
     /* 以 base 旋转角 t0 展开到 3D 世界坐标 */
     tip->x = r_plane * cosf(t0);
@@ -132,15 +175,15 @@ static float solve_j2_j3_for_j1(float j1_rad, float r, float vz,
     float d = sqrtf(d2);
 
     /* 可达性: |L2 - L3| ≤ d ≤ L2 + L3 */
-    float l_min = fabsf(ARM_L2 - ARM_L3);
-    float l_max = ARM_L2 + ARM_L3;
+    float l_min = fabsf(ARM_L2 - ARM_L3_VAL);
+    float l_max = ARM_L2 + ARM_L3_VAL;
     if (d < l_min - 0.5f || d > l_max + 0.5f)
         return INFINITY;
 
     /* 余弦定理: L3² = L2² + d² - 2·L2·d·cos(α)
        → cos(α) = (L2² + d² - L3²) / (2·L2·d)
        α 是 L2 与 d 之间的夹角 */
-    float cos_alpha = (ARM_L2 * ARM_L2 + d2 - ARM_L3 * ARM_L3)
+    float cos_alpha = (ARM_L2 * ARM_L2 + d2 - ARM_L3_VAL * ARM_L3_VAL)
                       / (2.0f * ARM_L2 * d);
     if (cos_alpha > 1.0f) cos_alpha = 1.0f;
     if (cos_alpha < -1.0f) cos_alpha = -1.0f;
@@ -148,8 +191,8 @@ static float solve_j2_j3_for_j1(float j1_rad, float r, float vz,
 
     /* 余弦定理: d² = L2² + L3² - 2·L2·L3·cos(π-θ₃)
        → cos(θ₃) = (d² - L2² - L3²) / (2·L2·L3)  */
-    float cos_beta = (d2 - ARM_L2 * ARM_L2 - ARM_L3 * ARM_L3)
-                     / (2.0f * ARM_L2 * ARM_L3);
+    float cos_beta = (d2 - ARM_L2 * ARM_L2 - ARM_L3_VAL * ARM_L3_VAL)
+                     / (2.0f * ARM_L2 * ARM_L3_VAL);
     if (cos_beta > 1.0f) cos_beta = 1.0f;
     if (cos_beta < -1.0f) cos_beta = -1.0f;
     float beta = acosf(cos_beta); /* β = π - |θ₃| */
@@ -259,7 +302,6 @@ static IKResult_t ik_solve_full(float r, float vz, float yaw_deg, JointAngles_t 
     /*=== Pass2: Pass1 没找到水平解, 放宽重搜 ===*/
     if (!found_level && best_yaw_err != INFINITY)
     {
-        float pass1_best = best_yaw_err;
         for (float j1_deg = 0.0f; j1_deg <= 90.0f + 1e-4f; j1_deg += J1_STEP)
         {
             float j1_rad = deg2rad(j1_deg);
@@ -313,7 +355,7 @@ IKResult_t kinematics_inverse(const ArmTipState_t *target, JointAngles_t *geom)
         theta0_deg = BASE_SAFE_MAX_DEG;
 
     float r = sqrtf(target->x * target->x + target->y * target->y);
-    float vz = target->z - ARM_D1;
+    float vz = target->z - ARM_D1_VAL;
 
     IKResult_t ret = ik_solve_full(r, vz, target->yaw, geom);
     if (ret != IK_OK)

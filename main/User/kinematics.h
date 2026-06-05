@@ -141,6 +141,22 @@ extern "C"
      */
     bool kinematics_check_limits(const JointAngles_t *geom);
 
+    /**
+     * @brief 从 NVS 加载校准参数, 失败则使用 servo_cfg.h 默认值
+     */
+    void kinematics_load_calibration(void);
+
+    /**
+     * @brief 将当前运行时校准参数保存到 NVS
+     */
+    void kinematics_save_calibration(void);
+
+    /** @brief 获取运行时 ARM_D1 值 (mm) */
+    float kinematics_get_d1(void);
+
+    /** @brief 获取运行时 ARM_L3 值 (mm) */
+    float kinematics_get_l3(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -179,6 +179,20 @@ void servo_set_joints(const float angles[SERVO_COUNT])
     }
 }
 
+void servo_set_joints_immediate(const float angles[SERVO_COUNT])
+{
+    if (!s_initialized) return;
+    for (int i = 0; i < SERVO_COUNT; i++)
+    {
+        float deg = angles[i];
+        if (deg < SERVO_ANGLE_MIN_DEG) deg = SERVO_ANGLE_MIN_DEG;
+        if (deg > SERVO_ANGLE_MAX_DEG) deg = SERVO_ANGLE_MAX_DEG;
+        servo_write_hardware((ServoID_t)i, deg);
+        s_state[i].current_angle = deg;
+        s_state[i].is_active = false; /* 停掉缓动, 轨迹插补接管 */
+    }
+}
+
 void servo_stop(ServoID_t id)
 {
     if (id < 0 || id >= SERVO_COUNT)

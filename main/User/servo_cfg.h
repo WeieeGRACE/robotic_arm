@@ -112,14 +112,14 @@ typedef enum
 #define SERVO_ANGLE_MIN_DEG 0.0f
 #define SERVO_ANGLE_MAX_DEG 180.0f
 
-/*------ HOME 姿态 (收拢低位) ------
- *  大臂水平 (0°)，小臂收拢 (90°)，腕部待校准 (90°)，
- *  Base 正前方 (0°)，Gripper 打开 (0°)
+/*------ HOME / SAFE 姿态 (正前方, 接近地面) ------
+ *  上电瞬间的姿态, arm_control_init() 随后通过 IK 精确定位到安全位。
+ *  Base=0°(正前), J1前倾, J2半曲, J3回正, Gripper打开
  *----------------------------------------------*/
 #define SERVO_HOME_BASE 0.0f
-#define SERVO_HOME_JOINT1 90.0f /* 竖直收拢 */
-#define SERVO_HOME_JOINT2 0.0f  /* 小臂折叠，几何角 -60° */
-#define SERVO_HOME_JOINT3 90.0f /* 腕部待校准 */
+#define SERVO_HOME_JOINT1 20.0f /* 前倾, 靠近安全位 */
+#define SERVO_HOME_JOINT2 60.0f /* 肘半曲 */
+#define SERVO_HOME_JOINT3 100.0f /* 腕回正 */
 #define SERVO_HOME_ROTATE 0.0f
 #define SERVO_HOME_GRIPPER 0.0f
 
@@ -146,8 +146,8 @@ typedef enum
 /*=======================================================
  *  底座安全角度范围 (舵机逻辑角)
  *=======================================================*/
-#define BASE_SAFE_MIN_DEG 0.0f
-#define BASE_SAFE_MAX_DEG 180.0f
+#define BASE_SAFE_MIN_DEG -90.0f   /* 底座允许负角度(左转) */
+#define BASE_SAFE_MAX_DEG 180.0f   /* 右转极限=正后方 */
 
 /*=======================================================
  *  查表辅助宏

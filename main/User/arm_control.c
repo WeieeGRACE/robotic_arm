@@ -29,32 +29,73 @@ static void wait_all_servos_idle(void)
 }
 
 /*-----------------------------------------------------
- *  初始化
+ *  初始化 → 安全位 (正前方, 末端贴近地面)
  *-----------------------------------------------------*/
 void arm_control_init(void)
 {
-    ESP_LOGI(TAG, "Arm control init -> HOME");
+    ESP_LOGI(TAG, "Arm control init → SAFE position");
 
-    /* HOME: Base=0° J1=90° J2=-56°(最大折叠) J3=0°(伸直) Gripper打开 */
-    s_geom_target.theta0 = 0.0f;
-    s_geom_target.theta1 = 90.0f;
-    s_geom_target.theta2 = -56.0f; /* 机械极限, servo2=0 */
-    s_geom_target.theta3 = 0.0f;
-    s_geom_target.theta4 = 0.0f;
+    /* 尝试通过 IK 走到安全位 (正前方, 离地 40mm) */
+    ArmTipState_t safe_target = {
+        .x   = 250.0f,
+        .y   = 0.0f,
+        .z   = 40.0f,
+        .yaw = 0.0f,
+    };
 
-    ServoAngles_t servo;
-    kinematics_geom_to_servo(&s_geom_target, &servo);
+    JointAngles_t geom;
+    IKResult_t ik_res = kinematics_inverse(&safe_target, &geom);
 
-    servo_set_angle(SERVO_ID_BASE, servo.servo0);
-    servo_set_angle(SERVO_ID_JOINT1, servo.servo1);
-    servo_set_angle(SERVO_ID_JOINT2, servo.servo2);
-    servo_set_angle(SERVO_ID_JOINT3, servo.servo3);
-    servo_set_angle(SERVO_ID_ROTATE, servo.servo4);
-    servo_set_angle(SERVO_ID_GRIPPER, 0.0f); /* 夹爪打开 */
+    if (ik_res == IK_OK && kinematics_check_limits(&geom)) {
+        /* IK 成功 → 走安全位 */
+        ServoAngles_t servo;
+        kinematics_geom_to_servo(&geom, &servo);
 
-    wait_all_servos_idle();
-    ESP_LOGI(TAG, "HOME reached (base=%.1f j1=%.1f j2=%.1f j3=%.1f rot=%.1f)",
-             servo.servo0, servo.servo1, servo.servo2, servo.servo3, servo.servo4);
+        servo_set_angle(SERVO_ID_BASE,    servo.servo0);
+        servo_set_angle(SERVO_ID_JOINT1,  servo.servo1);
+        servo_set_angle(SERVO_ID_JOINT2,  servo.servo2);
+        servo_set_angle(SERVO_ID_JOINT3,  servo.servo3);
+        servo_set_angle(SERVO_ID_ROTATE,  servo.servo4);
+        servo_set_angle(SERVO_ID_GRIPPER, 0.0f);
+
+        wait_all_servos_idle();
+
+        s_geom_target = geom;
+        s_geom_target.theta4 = 0.0f;
+
+        /* FK 验证 */
+        ArmTipState_t tip;
+        kinematics_forward(&s_geom_target, &tip);
+        ESP_LOGI(TAG, "SAFE reached  tip=(%.1f,%.1f,%.1f)  "
+                 "servo=(%.1f,%.1f,%.1f,%.1f)",
+                 (double)tip.x, (double)tip.y, (double)tip.z,
+                 (double)servo.servo0, (double)servo.servo1,
+                 (double)servo.servo2, (double)servo.servo3);
+    } else {
+        /* IK 失败 → 回退用近似舵机角 */
+        ESP_LOGW(TAG, "IK for (250,0,40) failed, using fallback joint pose");
+
+        s_geom_target.theta0 = 0.0f;
+        s_geom_target.theta1 = 10.0f;
+        s_geom_target.theta2 = -30.0f;
+        s_geom_target.theta3 = 20.0f;
+        s_geom_target.theta4 = 0.0f;
+
+        ServoAngles_t servo;
+        kinematics_geom_to_servo(&s_geom_target, &servo);
+
+        servo_set_angle(SERVO_ID_BASE,    servo.servo0);
+        servo_set_angle(SERVO_ID_JOINT1,  servo.servo1);
+        servo_set_angle(SERVO_ID_JOINT2,  servo.servo2);
+        servo_set_angle(SERVO_ID_JOINT3,  servo.servo3);
+        servo_set_angle(SERVO_ID_ROTATE,  servo.servo4);
+        servo_set_angle(SERVO_ID_GRIPPER, 0.0f);
+
+        wait_all_servos_idle();
+        ESP_LOGI(TAG, "Fallback SAFE reached (servo: %.1f,%.1f,%.1f,%.1f)",
+                 (double)servo.servo0, (double)servo.servo1,
+                 (double)servo.servo2, (double)servo.servo3);
+    }
 }
 
 /*-----------------------------------------------------
@@ -382,20 +423,20 @@ static void pick_and_place_at(float j1, float j2, float j3,
 void arm_control_multi_pick_and_place(void)
 {
     /* 点1: 低远 — (288, 0, 61) */
-    pick_and_place_at(0.0f, 0.0f, 60.0f, 180.0f, "P1-low");
+    pick_and_place_at(0.0f, 0.0f, 60.0f, 90.0f, "P1-low");
 
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    pick_and_place_at(0.0f, 40.0f, 80.0f, 180.0f, "P2-midlow");
+    pick_and_place_at(0.0f, 40.0f, 80.0f, 90.0f, "P2-midlow");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    pick_and_place_at(0.0f, 60.0f, 90.0f, 180.0f, "P3-mid");
+    pick_and_place_at(0.0f, 60.0f, 90.0f, 90.0f, "P3-mid");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    pick_and_place_at(0.0f, 100.0f, 110.0f, 180.0f, "P4-midhigh");
+    pick_and_place_at(0.0f, 100.0f, 110.0f, 90.0f, "P4-midhigh");
     arm_control_move_to(150.0f, 0.0f, 350.0f);
 
-    pick_and_place_at(40.0f, 160.0f, 163.0f, 180.0f, "P5-high");
+    pick_and_place_at(40.0f, 160.0f, 163.0f, 90.0f, "P5-high");
 
     /* 回 HOME */
     arm_control_move_to(150.0f, 0.0f, 350.0f);
@@ -413,12 +454,12 @@ void arm_control_multi_pick_and_place(void)
     wait_all_servos_idle();
     arm_control_set_gripper(100.0f);
 
-    /* 3段轨迹: 抬升 → 旋转到135° → 放下 */
+    /* 3段轨迹: 抬升 → 旋转到90° → 放下 */
     {
         TrajPoint_t traj[3] = {
             { .angles = {0.0f, 69.0f, 67.0f, 129.0f, 0.0f, 0.0f}, .duration_ms = 1500 },
-            { .angles = {180.0f, 69.0f, 67.0f, 129.0f, 0.0f, 0.0f}, .duration_ms = 2000 },
-            { .angles = {180.0f, 0.0f, 0.0f, 60.0f, 0.0f, 0.0f}, .duration_ms = 1500 },
+            { .angles = {90.0f, 69.0f, 67.0f, 129.0f, 0.0f, 0.0f}, .duration_ms = 2000 },
+            { .angles = {90.0f, 0.0f, 0.0f, 60.0f, 0.0f, 0.0f}, .duration_ms = 1500 },
         };
         traj_start(traj, 3);
         traj_wait_done();

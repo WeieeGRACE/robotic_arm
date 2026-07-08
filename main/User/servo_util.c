@@ -35,25 +35,35 @@ uint32_t servo_angle_to_duty(ServoID_t id, float deg)
         return s_duty_min[0];
     }
 
-    /* 钳位到逻辑极限 */
-    if (deg < SERVO_ANGLE_MIN_DEG)
-        deg = SERVO_ANGLE_MIN_DEG;
-    if (deg > SERVO_ANGLE_MAX_DEG)
-        deg = SERVO_ANGLE_MAX_DEG;
+    /* 钳位: 底座可负角度(左转), 其余关节限 [0,180] */
+    if (id == SERVO_ID_BASE) {
+        if (deg < -90.0f) deg = -90.0f;
+        if (deg > 180.0f) deg = 180.0f;
+    } else {
+        if (deg < SERVO_ANGLE_MIN_DEG) deg = SERVO_ANGLE_MIN_DEG;
+        if (deg > SERVO_ANGLE_MAX_DEG) deg = SERVO_ANGLE_MAX_DEG;
+    }
 
     uint32_t min_d = s_duty_min[id];
     uint32_t max_d = s_duty_max[id];
-    uint32_t span = max_d - min_d;
+    uint32_t span  = max_d - min_d;
 
-    if (s_direction[id] >= 0)
-    {
-        /* 正向: duty = min + deg/180 * span */
-        return min_d + (uint32_t)(deg / SERVO_ANGLE_MAX_DEG * (float)span + 0.5f);
-    }
-    else
-    {
-        /* 反向: duty = max - deg/180 * span */
-        return max_d - (uint32_t)(deg / SERVO_ANGLE_MAX_DEG * (float)span + 0.5f);
+    float ratio = deg / SERVO_ANGLE_MAX_DEG;
+    float foffs = ratio * (float)span;
+    int32_t offs = (int32_t)(foffs + (foffs >= 0 ? 0.5f : -0.5f));
+
+    if (s_direction[id] >= 0) {
+        /* 正向: duty = min + ratio*span */
+        int32_t d = (int32_t)min_d + offs;
+        if (d < 0) d = 0;
+        if (d > 4095) d = 4095;
+        return (uint32_t)d;
+    } else {
+        /* 反向: duty = max - ratio*span */
+        int32_t d = (int32_t)max_d - offs;
+        if (d < 0) d = 0;
+        if (d > 4095) d = 4095;
+        return (uint32_t)d;
     }
 }
 

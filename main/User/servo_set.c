@@ -143,10 +143,14 @@ void servo_set_angle(ServoID_t id, float angle)
     if (id < 0 || id >= SERVO_COUNT)
         return;
 
-    if (angle < SERVO_ANGLE_MIN_DEG)
-        angle = SERVO_ANGLE_MIN_DEG;
-    if (angle > SERVO_ANGLE_MAX_DEG)
-        angle = SERVO_ANGLE_MAX_DEG;
+    /* 底座允许负角度, 其余关节钳位 [0,180] */
+    if (id == SERVO_ID_BASE) {
+        if (angle < -90.0f) angle = -90.0f;
+        if (angle > 180.0f) angle = 180.0f;
+    } else {
+        if (angle < SERVO_ANGLE_MIN_DEG) angle = SERVO_ANGLE_MIN_DEG;
+        if (angle > SERVO_ANGLE_MAX_DEG) angle = SERVO_ANGLE_MAX_DEG;
+    }
 
     float delta = fabsf(angle - s_state[id].current_angle);
     if (delta < EASING_DELTA)
@@ -185,8 +189,13 @@ void servo_set_joints_immediate(const float angles[SERVO_COUNT])
     for (int i = 0; i < SERVO_COUNT; i++)
     {
         float deg = angles[i];
-        if (deg < SERVO_ANGLE_MIN_DEG) deg = SERVO_ANGLE_MIN_DEG;
-        if (deg > SERVO_ANGLE_MAX_DEG) deg = SERVO_ANGLE_MAX_DEG;
+        if (i == SERVO_ID_BASE) {
+            if (deg < -90.0f) deg = -90.0f;
+            if (deg > 180.0f) deg = 180.0f;
+        } else {
+            if (deg < SERVO_ANGLE_MIN_DEG) deg = SERVO_ANGLE_MIN_DEG;
+            if (deg > SERVO_ANGLE_MAX_DEG) deg = SERVO_ANGLE_MAX_DEG;
+        }
         servo_write_hardware((ServoID_t)i, deg);
         s_state[i].current_angle = deg;
         s_state[i].is_active = false; /* 停掉缓动, 轨迹插补接管 */

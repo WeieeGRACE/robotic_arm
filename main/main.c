@@ -1,6 +1,6 @@
 /**
  * @file  main.c
- * @brief 机械臂手动 pulse 抓取-旋转-放置测试
+ * @brief 视觉引导抓取 — 协调器 (底盘导航 + 机械臂)
  */
 
 #include <stdio.h>
@@ -8,45 +8,71 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "chassis.h"
 #include "servo_init.h"
 #include "servo_set.h"
 #include "kinematics.h"
 #include "arm_control.h"
+#include "vision_uart.h"
+#include "vision_coordinator.h"
 
 static const char *TAG = "MAIN";
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "  机械臂抓取-旋转-放置测试");
+    ESP_LOGI(TAG, "  Vision-Guided Pick & Place");
     ESP_LOGI(TAG, "========================================");
 
-    /* 初始化 NVS */
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
         nvs_flash_erase();
         nvs_flash_init();
     }
 
-    /* 加载校准参数 (NVS有则用, 无则用默认) */
+    /* 底盘最先 */
+    ret = chassis_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Chassis init failed!");
+        return;
+    }
+
+    /* 舵机 + 运动学 */
     kinematics_load_calibration();
-
     ret = servo_init();
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "舵机初始化失败!"); return; }
-
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Servo init failed!");
+        return;
+    }
     servo_set_init();
     arm_control_init();
 
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    /* 视觉通信 */
+    ret = vision_uart_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Vision UART failed!");
+        return;
+    }
+    vision_uart_set_camera_pose(-100, 0, 490, -31.0f);
 
-    arm_control_multi_pick_and_place();
+    /* 协调器 */
+    ret = vc_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Coordinator init failed!");
+        return;
+    }
 
-    /* 自动保存当前校准参数到 NVS */
-    kinematics_save_calibration();
+    vision_uart_send((const uint8_t *)"P4_READY\n", 9);
+    ESP_LOGI(TAG, "Running...");
 
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "  测试完成!");
-    ESP_LOGI(TAG, "========================================");
-
-    while (1) { vTaskDelay(pdMS_TO_TICKS(5000)); }
+    while (1)
+    {
+        vc_run(50);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }

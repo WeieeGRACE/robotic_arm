@@ -106,3 +106,9 @@ reasonix.toml
 # IDE / editor
 .vscode/
 .idea/
+
+# Personal / temporary
+技术文档.docx
+main/main_gpio_test.c
+main/git-error-*.txt
+.reasonix/

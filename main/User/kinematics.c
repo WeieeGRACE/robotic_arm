@@ -88,7 +88,6 @@ void kinematics_geom_to_servo(const JointAngles_t *geom,
     if (!geom || !servo)
         return;
 
-    /* θ0 = servo0 */
     servo->servo0 = geom->theta0;
 
     /* θ1 = servo1 */
@@ -350,9 +349,7 @@ IKResult_t kinematics_inverse(const ArmTipState_t *target, JointAngles_t *geom)
     if (!target || !geom)
         return IK_INVALID_INPUT;
 
-    float theta0_deg = fabsf(rad2deg(atan2f(target->y, target->x)));
-    if (theta0_deg > BASE_SAFE_MAX_DEG)
-        theta0_deg = BASE_SAFE_MAX_DEG;
+    float theta0_deg = rad2deg(atan2f(target->y, target->x));
 
     float r = sqrtf(target->x * target->x + target->y * target->y);
     float vz = target->z - ARM_D1_VAL;
